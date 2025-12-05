@@ -3,84 +3,84 @@ import yfinance as yf
 import pandas as pd
 import numpy as np
 
-st.set_page_config(page_title="RSI Compare", layout="wide")
-st.title("⚖️ كشف الحقيقة: أيهما يطابق TradingView؟")
+st.set_page_config(page_title="RSI Simple 24", layout="wide")
+st.title("📊 ماسح RSI (الحساب المباشر لآخر 24 شمعة)")
 
-# الإعدادات
+# --- الإعدادات ---
 RSI_PERIOD = 24
-TARGET_STOCK = "1180.SR" # البنك الأهلي (سهم المشكلة)
+TARGET_STOCK = "1180.SR" # البنك الأهلي
 
-# --- دالة حساب RSI باستخدام EWM (الأدق والأسرع) ---
-def calculate_rsi_vectorized(series, period):
-    delta = series.diff()
+# --- دالة الحساب المباشر (Cutler's / Simple RSI) ---
+def calculate_simple_rsi_on_window(series, period):
+    # 1. نحتاج آخر (Period + 1) إغلاق لحساب (Period) تغيير
+    if len(series) < period + 1:
+        return None
+        
+    # نأخذ النافذة الزمنية المطلوبة بالضبط (آخر 25 يوم للحصول على 24 تغيير)
+    window_series = series.iloc[-(period + 1):]
+    
+    # حساب الفرق
+    delta = window_series.diff().dropna()
+    
+    # فصل الربح والخسارة
     gain = delta.where(delta > 0, 0)
     loss = -delta.where(delta < 0, 0)
     
-    # محاكاة Wilder's Smoothing باستخدام alpha=1/N
-    # هذه الطريقة تتطابق مع TradingView عند وجود بيانات تاريخية طويلة
-    avg_gain = gain.ewm(alpha=1/period, min_periods=period, adjust=False).mean()
-    avg_loss = loss.ewm(alpha=1/period, min_periods=period, adjust=False).mean()
+    # --- التنفيذ الحرفي لطلبك ---
+    # حساب المتوسط البسيط (Simple Mean) لهذه الفترة فقط
+    avg_gain = gain.mean()
+    avg_loss = loss.mean()
     
+    if avg_loss == 0:
+        return 100
+        
     rs = avg_gain / avg_loss
     rsi = 100 - (100 / (1 + rs))
     return rsi
 
-# --- زر التشغيل ---
-if st.button(f"تحليل سهم {TARGET_STOCK} بكافة الطرق"):
+if st.button(f"احسب بناءً على آخر {RSI_PERIOD} يوم فقط"):
     
-    st.write("1. جاري جلب جميع البيانات التاريخية (Max History)...")
-    # نجلب البيانات الخام والمعدلة معاً
-    df = yf.download(TARGET_STOCK, period="max", interval="1d", auto_adjust=False, progress=False)
+    # نجلب بيانات شهرين لنضمن وجود 24 يوم تداول
+    df = yf.download(TARGET_STOCK, period="3mo", interval="1d", auto_adjust=False, progress=False)
     
     if not df.empty:
-        # التعامل مع هيكلة البيانات المعقدة
+        # استخراج عمود الإغلاق
         try:
-            # محاولة فك MultiIndex إذا وجد
             if isinstance(df.columns, pd.MultiIndex):
-                close_raw = df.xs('Close', level=0, axis=1)[TARGET_STOCK]
-                close_adj = df.xs('Adj Close', level=0, axis=1)[TARGET_STOCK]
+                close_series = df.xs('Close', level=0, axis=1)[TARGET_STOCK]
             else:
-                close_raw = df['Close']
-                close_adj = df['Adj Close']
+                close_series = df['Close']
         except:
-             # طريقة بديلة في حال فشل التحديد المباشر
-             close_raw = df['Close']
-             close_adj = df['Adj Close']
+             close_series = df.iloc[:, 0]
 
-        # حذف القيم المفقودة
-        close_raw = close_raw.dropna()
-        close_adj = close_adj.dropna()
-
-        # --- الحساب الأول: على السعر الخام (Close) ---
-        rsi_raw_series = calculate_rsi_vectorized(close_raw, RSI_PERIOD)
-        last_rsi_raw = rsi_raw_series.iloc[-1]
-        last_price_raw = close_raw.iloc[-1]
-
-        # --- الحساب الثاني: على السعر المعدل (Adj Close) ---
-        rsi_adj_series = calculate_rsi_vectorized(close_adj, RSI_PERIOD)
-        last_rsi_adj = rsi_adj_series.iloc[-1]
-        last_price_adj = close_adj.iloc[-1]
-
-        # --- عرض النتائج للمقارنة ---
-        st.subheader("النتيجة النهائية:")
+        close_series = close_series.dropna()
         
-        col1, col2 = st.columns(2)
+        # --- الحساب ---
+        rsi_val = calculate_simple_rsi_on_window(close_series, RSI_PERIOD)
         
-        with col1:
-            st.info("الخيار 1: السعر الخام (Raw Close)")
-            st.metric("السعر", f"{last_price_raw:.2f}")
-            st.metric(f"RSI ({RSI_PERIOD})", f"{last_rsi_raw:.2f}")
-            st.caption("يستخدم سعر الشاشة كما هو، بدون خصم توزيعات سابقة.")
-
-        with col2:
-            st.warning("الخيار 2: السعر المعدل (Adj Close)")
-            st.metric("السعر (قد يختلف)", f"{last_price_adj:.2f}")
-            st.metric(f"RSI ({RSI_PERIOD})", f"{last_rsi_adj:.2f}")
-            st.caption("يخصم الأرباح والمنح تاريخياً (غالباً هذا ما يستخدمه التحليل الفني).")
-
-        st.divider()
-        st.write("👆 **قارن الرقمين أعلاه مع شاشة TradingView وأخبرني أيهما طابق الـ 54.17؟**")
+        last_price = close_series.iloc[-1]
         
+        st.subheader("النتيجة (Strict 24-Day Calculation):")
+        
+        if rsi_val is not None:
+            col1, col2 = st.columns(2)
+            col1.metric("آخر سعر إغلاق", f"{last_price:.2f}")
+            col2.metric(f"RSI ({RSI_PERIOD})", f"{rsi_val:.2f}")
+            
+            st.info(f"""
+            **طريقة الحساب المستخدمة هنا:**
+            1. تم عزل آخر {RSI_PERIOD} تغيير في السعر بالضبط.
+            2. تم حساب مجموع الأرباح ÷ {RSI_PERIOD}.
+            3. تم حساب مجموع الخسائر ÷ {RSI_PERIOD}.
+            4. تم استخراج المؤشر (بدون أي اعتماد على بيانات أقدم من 24 يوم).
+            """)
+            
+            # عرض البيانات المستخدمة للمصداقية
+            with st.expander("عرض الـ 24 يوم المستخدمة في الحساب"):
+                window_data = close_series.iloc[-(RSI_PERIOD+1):]
+                st.dataframe(window_data)
+        else:
+            st.error("البيانات غير كافية (نحتاج 25 يوم تداول على الأقل).")
+            
     else:
-        st.error("فشل جلب البيانات.")
-
+        st.error("فشل الاتصال بالمصدر.")
