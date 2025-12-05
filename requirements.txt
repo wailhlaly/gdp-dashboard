@@ -2,4 +2,4 @@ streamlit
 yfinance
 pandas
 pandas_ta
-
+numpy==1.26.4
