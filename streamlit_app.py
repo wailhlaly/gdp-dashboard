@@ -1,31 +1,40 @@
 import streamlit as st
-import yfinance as yf
 import pandas as pd
 import numpy as np
+from tvDatafeed import TvDatafeed, Interval
 
-st.set_page_config(page_title="RSI Debugger", layout="wide")
-st.title("🕵️‍♂️ كاشف الأخطاء: لماذا يختلف الرقم؟")
+st.set_page_config(page_title="RSI TV Match", layout="wide")
+st.title("📊 ماسح RSI (بيانات TradingView مباشرة)")
 
 # --- الإعدادات ---
 RSI_PERIOD = 24
-TARGET_STOCK = "1180.SR"  # البنك الأهلي
+# لاحظ: الرموز في TradingView للسوق السعودي لا تحتاج .SR بل تحتاج تحديد السوق TADAWUL
+TICKERS_MAP = {
+    "1180": "الأهلي",
+    "1120": "الراجحي",
+    "2222": "أرامكو",
+    "2010": "سابك",
+    "7010": "STC"
+}
 
-# --- 1. معادلة TradingView الدقيقة (مع الذاكرة) ---
-def rsi_tradingview_logic(series, period):
+# --- دالة معادلة TradingView (RMA) ---
+def calculate_rsi_pine(series, period):
     delta = series.diff()
     gain = delta.clip(lower=0)
     loss = -delta.clip(upper=0)
     
-    # محاكاة دالة RMA في TradingView
-    # تبدأ بمتوسط بسيط SMA ثم تكمل بالمتوسط الأسي
+    avg_gain = series.ewm(alpha=1/period, min_periods=period, adjust=False).mean() # استخدام تقريب EWM
+    # للمطابقة التامة نحتاج RMA يدوية، لكن EWM قريبة جداً مع البيانات الطويلة
+    
+    # التنفيذ اليدوي الدقيق لـ RMA (كما في Pine Script)
     avg_gain = np.zeros_like(series)
     avg_loss = np.zeros_like(series)
     
-    # البداية: متوسط بسيط
+    # البداية SMA
     avg_gain[period] = gain[1:period+1].mean()
     avg_loss[period] = loss[1:period+1].mean()
     
-    # التكملة: متوسط أسي
+    # التكملة RMA
     for i in range(period + 1, len(series)):
         avg_gain[i] = (avg_gain[i-1] * (period - 1) + gain.iloc[i]) / period
         avg_loss[i] = (avg_loss[i-1] * (period - 1) + loss.iloc[i]) / period
@@ -35,48 +44,57 @@ def rsi_tradingview_logic(series, period):
     return pd.Series(rsi, index=series.index)
 
 # --- التشغيل ---
-if st.button(f"افحص بيانات {TARGET_STOCK}"):
-    st.info("جاري سحب البيانات...")
+if st.button('🚀 الاتصال بسيرفرات TradingView'):
     
-    # نسحب بيانات كافية (سنة) لكي تعمل المعادلة بشكل صحيح
-    df = yf.download(TARGET_STOCK, period="1y", interval="1d", auto_adjust=False, progress=False)
+    st.write("جاري الاتصال بـ TradingView (قد يستغرق وقتاً أطول قليلاً من Yahoo)...")
     
-    if not df.empty:
-        # تجهيز البيانات
+    # تهيئة الاتصال (بدون يوزر نيم وباسورد يدخل كزائر)
+    tv = TvDatafeed()
+    
+    results = []
+    
+    progress_bar = st.progress(0)
+    
+    for i, (symbol, name) in enumerate(TICKERS_MAP.items()):
         try:
-            close_series = df.xs('Close', level=0, axis=1)[TARGET_STOCK]
-        except:
-            close_series = df['Close']
+            # سحب البيانات من TADAWUL
+            # نطلب 500 شمعة (حوالي سنتين)
+            df = tv.get_hist(symbol=symbol, exchange='TADAWUL', interval=Interval.in_daily, n_bars=500)
             
-        close_series = close_series.dropna()
+            if df is not None and not df.empty:
+                # البيانات تأتي واسم العمود close (صغير) أو close (كبير) حسب النسخة
+                # tvDatafeed عادة تعيد الأعمدة كـ: symbol, open, high, low, close, volume
+                
+                # توحيد اسم العمود
+                df.columns = [c.lower() for c in df.columns]
+                
+                if 'close' in df.columns:
+                    close_series = df['close']
+                    
+                    # حساب RSI
+                    rsi_series = calculate_rsi_pine(close_series, RSI_PERIOD)
+                    
+                    last_rsi = rsi_series.iloc[-1]
+                    last_price = close_series.iloc[-1]
+                    
+                    results.append({
+                        "الرمز": symbol,
+                        "الاسم": name,
+                        "السعر (TV)": round(last_price, 2),
+                        f"RSI ({RSI_PERIOD})": round(last_rsi, 2)
+                    })
+        except Exception as e:
+            st.error(f"خطأ في {name}: {e}")
+            
+        progress_bar.progress((i + 1) / len(TICKERS_MAP))
         
-        # حساب RSI
-        rsi_series = rsi_tradingview_logic(close_series, RSI_PERIOD)
-        
-        # --- عرض جدول "الحقيقة" ---
-        st.subheader("🧐 دقق في هذا الجدول:")
-        st.write("قارن آخر صف في الجدول مع شاشة TradingView:")
+    progress_bar.empty()
 
-        # نأخذ آخر 5 أيام
-        last_5 = pd.DataFrame({
-            'التاريخ': close_series.index[-5:].strftime('%Y-%m-%d'),
-            'سعر الإغلاق (Yahoo)': close_series.iloc[-5:].values.round(2),
-            f'قيمة RSI ({RSI_PERIOD})': rsi_series.iloc[-5:].values.round(2)
-        })
-        
-        st.table(last_5)
-        
-        # استنتاج تلقائي
-        last_date_code = last_5.iloc[-1]['التاريخ']
-        last_price_code = last_5.iloc[-1]['سعر الإغلاق (Yahoo)']
-        
-        st.warning(f"""
-        **التشخيص:**
-        1. **التاريخ:** الكود يقرأ آخر شمعة بتاريخ: **{last_date_code}**. هل هذا هو تاريخ اليوم؟
-           - (إذا كان تاريخ أمس، فهذا هو سبب اختلاف الرقم، Yahoo متأخر).
-        2. **السعر:** الكود يرى السعر: **{last_price_code}**. هل يطابق السعر في شاشتك؟
-           - (إذا كان السعر مختلفاً، فالرقم الناتج سيكون مختلفاً حتماً).
-        """)
-        
+    if results:
+        st.subheader("النتائج (المصدر: TradingView):")
+        df_final = pd.DataFrame(results)
+        df_final = df_final.sort_values(by=f"RSI ({RSI_PERIOD})", ascending=False)
+        st.dataframe(df_final, use_container_width=True)
     else:
-        st.error("لم يتم جلب بيانات.")
+        st.error("فشل في جلب البيانات من TradingView. قد يكون هناك حظر IP مؤقت.")
+
