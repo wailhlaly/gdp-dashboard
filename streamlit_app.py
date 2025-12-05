@@ -4,13 +4,13 @@ import pandas as pd
 import numpy as np
 
 # --- إعداد الصفحة ---
-st.set_page_config(page_title="ماسح السوق السعودي", layout="wide")
-st.title("📊 ماسح RSI 24 (النسخة المستقرة)")
+st.set_page_config(page_title="RSI Pro Interactive", layout="wide")
+st.title("📊 ماسح RSI التفاعلي (مع سجل 24 يوم)")
 
 # --- الإعدادات ---
 RSI_PERIOD = 24
 
-# قائمة الأسهم (يمكنك إضافة المزيد)
+# قائمة الأسهم
 TICKERS = {
     "1180.SR": "الأهلي",
     "1120.SR": "الراجحي",
@@ -21,17 +21,16 @@ TICKERS = {
     "1211.SR": "معادن",
     "4030.SR": "البحري",
     "4200.SR": "الدريس",
+    "4190.SR": "جرير",
     "^TASI.SR": "المؤشر العام"
 }
 
-# --- دالة RMA (مطابقة لـ Pine Script) ---
+# --- دالة RMA (المطابقة لـ Pine Script) ---
 def calculate_rsi_rma(series, period):
     delta = series.diff()
     gain = delta.clip(lower=0)
     loss = -delta.clip(upper=0)
     
-    # محاكاة دالة RMA بدقة باستخدام EWM
-    # alpha = 1/period هي المعادلة الرياضية لـ RMA
     avg_gain = gain.ewm(alpha=1/period, min_periods=period, adjust=False).mean()
     avg_loss = loss.ewm(alpha=1/period, min_periods=period, adjust=False).mean()
     
@@ -39,92 +38,150 @@ def calculate_rsi_rma(series, period):
     rsi = 100 - (100 / (1 + rs))
     return rsi
 
-# --- زر التشغيل ---
-if st.button('🔄 تحديث البيانات'):
-    
-    st.info("جاري سحب البيانات من Yahoo Finance (سنتين لضمان دقة المعادلة)...")
-    
-    # سحب البيانات
-    try:
-        data = yf.download(list(TICKERS.keys()), period="2y", interval="1d", group_by='ticker', auto_adjust=False, progress=True)
-    except Exception as e:
-        st.error("خطأ في الاتصال بالمصدر.")
-        st.stop()
+# --- تهيئة الجلسة لحفظ البيانات (Caching) ---
+if 'market_data' not in st.session_state:
+    st.session_state['market_data'] = {}
 
-    if not data.empty:
-        results = []
-        progress_bar = st.progress(0)
+# --- زر التحديث ---
+col_btn, col_info = st.columns([1, 4])
+with col_btn:
+    if st.button('🔄 تحديث ومسح السوق'):
+        st.session_state['market_data'] = {} # تصفير البيانات القديمة
         
-        for i, (symbol, name) in enumerate(TICKERS.items()):
+        with st.spinner("جاري سحب بيانات سنتين لضمان الدقة..."):
             try:
-                # استخراج البيانات
-                try:
-                    df = data[symbol].copy()
-                except KeyError:
-                    continue
-
-                # تحديد عمود الإغلاق
-                if 'Close' in df.columns:
-                    series = df['Close']
-                elif 'Adj Close' in df.columns:
-                    series = df['Adj Close']
-                else:
-                    continue
+                # سحب البيانات
+                raw_data = yf.download(list(TICKERS.keys()), period="2y", interval="1d", group_by='ticker', auto_adjust=False, progress=False)
                 
-                series = series.dropna()
+                if not raw_data.empty:
+                    processed_data = {}
+                    summary_list = []
+                    
+                    # معالجة كل سهم
+                    for symbol, name in TICKERS.items():
+                        try:
+                            # استخراج البيانات الخاصة بالسهم
+                            try:
+                                df = raw_data[symbol].copy()
+                            except KeyError:
+                                continue
 
-                # شرط البيانات الكافية
-                if len(series) > RSI_PERIOD + 20:
+                            # تحديد عمود الإغلاق
+                            if 'Close' in df.columns:
+                                df = df.rename(columns={'Close': 'Close_Price'}) # إعادة تسمية لتجنب التعارض
+                                series = df['Close_Price']
+                            elif 'Adj Close' in df.columns:
+                                df = df.rename(columns={'Adj Close': 'Close_Price'})
+                                series = df['Close_Price']
+                            else:
+                                continue
+                            
+                            df = df.dropna()
+
+                            if len(series) > RSI_PERIOD + 20:
+                                # حساب RSI وإضافته كعمود في الداتا فريم
+                                df['RSI'] = calculate_rsi_rma(series, RSI_PERIOD)
+                                
+                                last_rsi = df['RSI'].iloc[-1]
+                                last_price = series.iloc[-1]
+                                
+                                # حفظ البيانات الكاملة في الذاكرة (للاستدعاء عند الضغط)
+                                processed_data[name] = df 
+                                
+                                if not np.isnan(last_rsi):
+                                    summary_list.append({
+                                        "الاسم": name,
+                                        "الرمز": symbol,
+                                        "السعر الحالي": last_price,
+                                        f"RSI ({RSI_PERIOD})": last_rsi
+                                    })
+                        except Exception as e:
+                            pass
                     
-                    # حساب RSI
-                    rsi_series = calculate_rsi_rma(series, RSI_PERIOD)
-                    
-                    last_rsi = rsi_series.iloc[-1]
-                    last_price = series.iloc[-1]
-                    
-                    if not np.isnan(last_rsi):
-                        results.append({
-                            "الرمز": symbol,
-                            "الاسم": name,
-                            "السعر": last_price,
-                            f"RSI ({RSI_PERIOD})": last_rsi
-                        })
-            except:
-                pass
-            
-            progress_bar.progress((i + 1) / len(TICKERS))
+                    # حفظ النتائج في الجلسة
+                    st.session_state['market_data'] = processed_data
+                    st.session_state['summary'] = summary_list
+                    st.success("تم التحديث بنجاح!")
+                else:
+                    st.error("لم يتم العثور على بيانات.")
+            except Exception as e:
+                st.error(f"حدث خطأ: {e}")
+
+# --- عرض النتائج ---
+if 'summary' in st.session_state and st.session_state['summary']:
+    
+    # 1. جدول الملخص
+    st.subheader("📋 ملخص السوق (مرتب حسب التشبع)")
+    
+    df_summary = pd.DataFrame(st.session_state['summary'])
+    df_summary = df_summary.sort_values(by=f"RSI ({RSI_PERIOD})", ascending=False)
+    
+    # تنسيق الألوان المطور
+    def highlight_rsi_advanced(val):
+        color = '#ffffff' # لون الخط الافتراضي (أبيض)
+        bg_color = ''     # لون الخلفية
+        weight = 'normal'
         
-        progress_bar.empty()
+        if val >= 70:
+            bg_color = '#8B0000' # أحمر غامق (خلفية)
+            color = 'white'
+            weight = 'bold'
+        elif val <= 30:
+            bg_color = '#006400' # أخضر غامق (خلفية)
+            color = 'white'
+            weight = 'bold'
+        elif 30 < val < 40:
+             color = '#90EE90' # أخضر فاتح (نص فقط)
+        elif 60 < val < 70:
+             color = '#FF7F7F' # أحمر فاتح (نص فقط)
+             
+        style = f'color: {color}; font-weight: {weight};'
+        if bg_color:
+            style += f' background-color: {bg_color}; border-radius: 5px;'
+        return style
 
-        # --- عرض النتائج ---
-        if results:
-            df_final = pd.DataFrame(results)
-            col_rsi = f"RSI ({RSI_PERIOD})"
-            
-            # ترتيب من الأكبر (تشبع شرائي) للأصغر
-            df_final = df_final.sort_values(by=col_rsi, ascending=False)
-            
-            # تلوين
-            def color_rsi(val):
-                color = 'black'
-                weight = 'normal'
-                if val >= 70: 
-                    color = '#d32f2f' # أحمر
-                    weight = 'bold'
-                elif val <= 30: 
-                    color = '#388e3c' # أخضر
-                    weight = 'bold'
-                return f'color: {color}; font-weight: {weight}'
+    st.dataframe(
+        df_summary.style.map(highlight_rsi_advanced, subset=[f"RSI ({RSI_PERIOD})"])
+                  .format({"السعر الحالي": "{:.2f}", f"RSI ({RSI_PERIOD})": "{:.2f}"}),
+        use_container_width=True
+    )
+    
+    st.divider()
 
-            st.dataframe(
-                df_final.style.map(color_rsi, subset=[col_rsi])
-                        .format({"السعر": "{:.2f}", col_rsi: "{:.2f}"}),
-                use_container_width=True,
-                height=600
-            )
-            
-            st.warning("⚠️ تنبيه: القيم تعتمد على بيانات Yahoo Finance المجانية وقد تختلف قليلاً عن TradingView.")
-        else:
-            st.error("لا توجد نتائج لعرضها.")
-    else:
-        st.error("فشل جلب البيانات.")
+    # 2. ميزة استدعاء التفاصيل (التفاعل)
+    st.subheader("🔎 تفاصيل الأسعار (آخر 24 يوم)")
+    
+    # قائمة منسدلة لاختيار الشركة
+    selected_company = st.selectbox(
+        "اختر الشركة لعرض سجل الأسعار والـ RSI:",
+        options=[item['الاسم'] for item in st.session_state['summary']],
+        index=0
+    )
+    
+    if selected_company:
+        # استرجاع الداتا فريم المحفوظة لهذه الشركة
+        stock_df = st.session_state['market_data'][selected_company]
+        
+        # استخراج آخر 24 يوم فقط
+        last_24_days = stock_df.tail(24).copy()
+        
+        # ترتيب الأعمدة للعرض
+        # نحاول العثور على الأعمدة المتاحة (Open, High, Low, Close_Price, RSI)
+        cols_to_show = ['Close_Price', 'RSI']
+        if 'Open' in last_24_days.columns: cols_to_show.insert(0, 'Open')
+        if 'High' in last_24_days.columns: cols_to_show.insert(1, 'High')
+        if 'Low' in last_24_days.columns: cols_to_show.insert(2, 'Low')
+        
+        display_df = last_24_days[cols_to_show].sort_index(ascending=False) # الأحدث في الأعلى
+        
+        # عرض البيانات مع التلوين
+        st.write(f"سجل بيانات **{selected_company}**:")
+        st.dataframe(
+            display_df.style.map(highlight_rsi_advanced, subset=['RSI'])
+                      .format("{:.2f}"),
+            use_container_width=True,
+            height=400 # ارتفاع مناسب لعرض 24 صف
+        )
+
+else:
+    st.info("اضغط على زر 'تحديث ومسح السوق' للبدء.")
