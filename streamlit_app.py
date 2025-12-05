@@ -5,12 +5,12 @@ import numpy as np
 import os
 from datetime import datetime, date
 
-st.set_page_config(page_title="RSI 24 Precise", layout="wide")
-st.title("📊 ماسح RSI 24 (سريع ودقيق)")
+st.set_page_config(page_title="RSI 24 Exact", layout="wide")
+st.title("📊 ماسح RSI 24 (المطابق رياضياً لـ TradingView)")
 
 # --- الإعدادات ---
 RSI_PERIOD = 24
-FILE_NAME = "tasi_optimized.csv"
+FILE_NAME = "tasi_rsi_exact.csv"
 
 # القائمة
 TICKERS = {
@@ -22,49 +22,52 @@ TICKERS = {
     "^TASI.SR": "المؤشر العام"
 }
 
-# --- معادلة TradingView (Wilder's Smoothing) ---
-def calculate_rsi_wilder(series, period):
-    # حساب الفرق
-    delta = series.diff()
+# --- دالة RSI اليدوية (Simulating Pine Script RMA) ---
+def calculate_rsi_exact(series, period):
+    # تحويل البيانات إلى قائمة للسرعة في المعالجة
+    prices = series.values
     
-    # فصل الربح والخسارة
-    gain = delta.where(delta > 0, 0)
-    loss = -delta.where(delta < 0, 0)
+    # حساب التغيرات
+    deltas = np.diff(prices)
     
-    # تحضير المصفوفات
-    avg_gain = np.full_like(series, np.nan)
-    avg_loss = np.full_like(series, np.nan)
+    # مصفوفات الأرباح والخسائر
+    gains = np.where(deltas > 0, deltas, 0)
+    losses = np.where(deltas < 0, -deltas, 0)
     
-    g_values = gain.values
-    l_values = loss.values
+    avg_gains = np.zeros_like(prices)
+    avg_losses = np.zeros_like(prices)
     
-    # الخطوة 1: أول قيمة تكون متوسط بسيط (SMA)
-    # نحتاج للتأكد من توفر بيانات كافية
-    if len(series) > period:
-        avg_gain[period] = g_values[1:period+1].mean()
-        avg_loss[period] = l_values[1:period+1].mean()
+    # --- الخطوة 1: التهيئة (SMA) ---
+    # TradingView يبدأ بحساب متوسط بسيط لأول 24 يوم
+    if len(prices) > period:
+        avg_gains[period] = np.mean(gains[:period])
+        avg_losses[period] = np.mean(losses[:period])
         
-        # الخطوة 2: باقي القيم تكون متوسط أسي (Smoothing)
-        for i in range(period + 1, len(series)):
-            avg_gain[i] = (g_values[i] + (period - 1) * avg_gain[i-1]) / period
-            avg_loss[i] = (l_values[i] + (period - 1) * avg_loss[i-1]) / period
+        # --- الخطوة 2: التنعيم الأسي (RMA/Wilder's) ---
+        # المعادلة: (Previous * (n-1) + Current) / n
+        for i in range(period + 1, len(prices)):
+            avg_gains[i] = (avg_gains[i-1] * (period - 1) + gains[i-1]) / period
+            avg_losses[i] = (avg_losses[i-1] * (period - 1) + losses[i-1]) / period
             
-    rs = avg_gain / avg_loss
+    # حساب RS و RSI
+    # نتجنب القسمة على صفر
+    with np.errstate(divide='ignore', invalid='ignore'):
+        rs = avg_gains / avg_losses
+        rsi = 100 - (100 / (1 + rs))
     
-    # معادلة RSI النهائية
-    np.seterr(divide='ignore', invalid='ignore')
-    rsi = 100 - (100 / (1 + rs))
+    # استبدال القيم اللانهائية (في حال كان الهبوط صفر)
+    rsi[np.isinf(rsi)] = 100
     
     return pd.Series(rsi, index=series.index)
 
 # --- التشغيل ---
-if st.button('🚀 تحديث (بيانات سنتين)'):
+if st.button('🚀 تحديث ومطابقة البيانات'):
     
-    st.write("جاري سحب بيانات سنتين فقط (كافية للدقة وسريعة)...")
+    st.write("جاري المعالجة...")
     
-    # قمنا بتقليل المدة إلى سنتين "2y" بدلاً من "max"
-    # هذا هو الحد الأدنى للحصول على رقم مطابق لـ TradingView
-    data = yf.download(list(TICKERS.keys()), period="2y", interval="1d", group_by='ticker', auto_adjust=False, progress=True)
+    # نطلب فترة '5y' لضمان استقرار المعادلة (لن يؤثر على سرعة العرض)
+    # المعادلة تحتاج لتاريخ طويل لتصل للدقة العشرية المطلوبة
+    data = yf.download(list(TICKERS.keys()), period="5y", interval="1d", group_by='ticker', auto_adjust=False, progress=False)
     
     if not data.empty:
         results = []
@@ -83,17 +86,20 @@ if st.button('🚀 تحديث (بيانات سنتين)'):
                 else:
                     continue
                 
+                # تنظيف
                 series = series.dropna()
 
-                # نحتاج بيانات أكثر من 24 يوم لكي تعمل المعادلة
-                if len(series) > RSI_PERIOD + 10:
+                # نحتاج بيانات كافية
+                if len(series) > RSI_PERIOD + 1:
                     
-                    rsi_series = calculate_rsi_wilder(series, RSI_PERIOD)
+                    # استخدام الدالة اليدوية الجديدة
+                    rsi_series = calculate_rsi_exact(series, RSI_PERIOD)
                     
                     last_rsi = rsi_series.iloc[-1]
                     last_price = series.iloc[-1]
                     
-                    if not np.isnan(last_rsi):
+                    # التحقق من عدم وجود NaN
+                    if not np.isnan(last_rsi) and last_rsi != 0:
                         results.append({
                             "الرمز": symbol,
                             "الاسم": name,
@@ -108,7 +114,7 @@ if st.button('🚀 تحديث (بيانات سنتين)'):
             col_rsi = f"RSI ({RSI_PERIOD})"
             df_final = df_final.sort_values(by=col_rsi, ascending=False)
             
-            # التلوين
+            # تلوين
             def color_rsi(val):
                 color = 'black'
                 if val >= 70: color = '#d32f2f'
@@ -121,7 +127,6 @@ if st.button('🚀 تحديث (بيانات سنتين)'):
                 use_container_width=True
             )
         else:
-            st.error("لا توجد نتائج.")
+            st.error("لا توجد بيانات كافية للحساب.")
     else:
-        st.error("فشل الاتصال.")
-
+        st.error("فشل الاتصال بالمصدر.")
