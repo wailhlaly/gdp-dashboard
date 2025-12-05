@@ -4,89 +4,119 @@ import pandas as pd
 import numpy as np
 
 # --- إعداد الصفحة ---
-st.set_page_config(page_title="ماسح السوق السعودي", layout="wide")
-st.title("✅ ماسح RSI (بدون مكتبات خارجية)")
+st.set_page_config(page_title="محلل السوق السعودي", layout="wide")
+st.title("📊 تحليل RSI للسوق السعودي")
 
-# --- دالة حساب RSI يدوياً (لتجنب مشاكل المكتبات) ---
-def calculate_rsi(series, period=14):
-    delta = series.diff()
-    gain = (delta.where(delta > 0, 0)).ewm(alpha=1/period, adjust=False).mean()
-    loss = (-delta.where(delta < 0, 0)).ewm(alpha=1/period, adjust=False).mean()
-    rs = gain / loss
-    return 100 - (100 / (1 + rs))
+# --- دالة حساب RSI (نسخة مُحسنة) ---
+def calculate_rsi(data, window=14):
+    delta = data.diff()
+    gain = (delta.where(delta > 0, 0)).fillna(0)
+    loss = (-delta.where(delta < 0, 0)).fillna(0)
 
-# --- القائمة والبيانات ---
-TICKERS = [
-    "1120.SR", "2222.SR", "2010.SR", "1180.SR", "7010.SR", 
-    "4030.SR", "5110.SR", "4200.SR", "1150.SR", "1010.SR",
-    "^TASI.SR"
-]
+    # استخدام المتوسط المتحرك الأسي (Exponential Moving Average)
+    avg_gain = gain.ewm(span=window, adjust=False).mean()
+    avg_loss = loss.ewm(span=window, adjust=False).mean()
 
-try:
-    st.write("جاري جلب البيانات من المصدر...")
+    rs = avg_gain / avg_loss
+    rsi = 100 - (100 / (1 + rs))
+    return rsi
+
+# --- قائمة الأسهم ---
+# يمكنك إضافة المزيد هنا
+TICKERS = {
+    "1120.SR": "الراجحي",
+    "2222.SR": "أرامكو",
+    "2010.SR": "سابك",
+    "1180.SR": "الأهلي",
+    "7010.SR": "STC",
+    "4030.SR": "البحري",
+    "5110.SR": "كهرباء السعودية",
+    "4200.SR": "الدريس",
+    "^TASI.SR": "المؤشر العام"
+}
+
+# --- زر التشغيل ---
+if st.button('🔄 تحديث البيانات وحساب المؤشرات'):
     
-    # جلب البيانات لجميع الأسهم مرة واحدة
-    data = yf.download(TICKERS, period="3mo", group_by='ticker', progress=False)
+    results = []
+    progress_bar = st.progress(0)
+    status_text = st.empty()
     
-    if data.empty:
-        st.error("فشل الاتصال بالمصدر (Yahoo Finance). حاول لاحقاً.")
-    else:
-        results = []
+    # حلقة لجلب بيانات كل سهم على حدة (أكثر استقراراً)
+    for i, (symbol, name) in enumerate(TICKERS.items()):
+        status_text.text(f"جاري تحليل: {name}...")
         
-        for ticker in TICKERS:
-            try:
-                # استخراج بيانات السهم
-                df_stock = data[ticker].copy() if ticker in data.columns.levels[0] else pd.DataFrame()
-                
-                if df_stock.empty:
-                    # محاولة أخرى في حال لم يكن MultiIndex
-                    if ticker in data.columns: 
-                        df_stock = data # حالة سهم واحد
-                    else:
-                        continue
-
-                # التأكد من وجود عمود الإغلاق
-                close_col = 'Close' if 'Close' in df_stock.columns else 'Adj Close'
-                
-                # تنظيف البيانات
-                df_stock = df_stock.dropna(subset=[close_col])
-
-                if len(df_stock) > 20:
-                    # تطبيق معادلة RSI اليدوية
-                    df_stock['RSI'] = calculate_rsi(df_stock[close_col])
-                    
-                    last_rsi = df_stock['RSI'].iloc[-1]
-                    last_price = df_stock[close_col].iloc[-1]
-                    
-                    results.append({
-                        "الرمز": ticker,
-                        "السعر": last_price,
-                        "RSI": last_rsi
-                    })
-            except Exception as e:
-                continue # تخطي السهم الذي فيه مشكلة
-
-        # --- عرض الجدول النهائي ---
-        if results:
-            df_final = pd.DataFrame(results)
-            df_final = df_final.sort_values(by="RSI", ascending=False)
+        try:
+            # جلب بيانات سنة كاملة لضمان دقة الحساب
+            stock_data = yf.download(symbol, period="1y", interval="1d", progress=False)
             
-            # دالة التلوين البسيطة
-            def highlight_rsi(val):
-                color = 'black'
-                if val > 70: color = 'red'
-                elif val < 30: color = 'green'
-                return f'color: {color}'
+            # التأكد من أن البيانات ليست فارغة
+            if not stock_data.empty and len(stock_data) > 20:
+                
+                # التعامل مع مشاكل تسمية الأعمدة
+                if 'Close' in stock_data.columns:
+                    close_prices = stock_data['Close']
+                elif 'Adj Close' in stock_data.columns:
+                    close_prices = stock_data['Adj Close']
+                else:
+                    # محاولة أخيرة لاستخراج العمود الأول كأنه الإغلاق
+                    close_prices = stock_data.iloc[:, 0]
 
-            st.subheader("النتائج:")
-            st.dataframe(
-                df_final.style.map(highlight_rsi, subset=['RSI'])
-                        .format({"السعر": "{:.2f}", "RSI": "{:.2f}"}),
-                use_container_width=True
-            )
-        else:
-            st.warning("لم يتم العثور على بيانات كافية.")
+                # --- حساب RSI ---
+                # نقوم بتحويل البيانات إلى سلسلة رقمية بحتة لتجنب الأخطاء
+                close_series = pd.Series(close_prices.values.flatten(), index=stock_data.index)
+                
+                rsi_series = calculate_rsi(close_series)
+                
+                # استخراج آخر قيمة
+                last_rsi = rsi_series.iloc[-1]
+                last_price = close_series.iloc[-1]
+                
+                # التحقق أن القيمة ليست NaN
+                if not np.isnan(last_rsi):
+                    results.append({
+                        "الرمز": symbol,
+                        "الاسم": name,
+                        "السعر": round(float(last_price), 2),
+                        "RSI": round(float(last_rsi), 2)
+                    })
+        except Exception as e:
+            print(f"Error analyzing {symbol}: {e}")
+            continue
+        
+        # تحديث شريط التقدم
+        progress_bar.progress((i + 1) / len(TICKERS))
 
-except Exception as e:
-    st.error(f"حدث خطأ غير متوقع: {e}")
+    status_text.text("✅ تم الانتهاء!")
+    progress_bar.empty()
+
+    # --- عرض النتائج ---
+    if results:
+        df_final = pd.DataFrame(results)
+        
+        # ترتيب حسب RSI من الأكبر للأصغر
+        df_final = df_final.sort_values(by="RSI", ascending=False)
+        
+        # دالة التلوين
+        def color_rsi(val):
+            color = 'black'
+            if val >= 70:
+                color = '#ff4b4b' # أحمر (تشبع شرائي)
+            elif val <= 30:
+                color = '#09ab3b' # أخضر (تشبع بيعي)
+            return f'color: {color}; font-weight: bold;'
+
+        st.subheader("📋 ملخص السوق (الأعلى RSI في الأعلى)")
+        
+        st.dataframe(
+            df_final.style.map(color_rsi, subset=['RSI'])
+                    .format({"السعر": "{:.2f}", "RSI": "{:.2f}"}),
+            use_container_width=True,
+            hide_index=True # إخفاء عمود الترقيم الجانبي لشكل أنظف
+        )
+    else:
+        st.error("لم نتمكن من حساب البيانات. قد يكون السوق مغلقاً أو هناك مشكلة في المصدر.")
+
+else:
+    st.info("اضغط على الزر أعلاه لبدء التحليل.")
 
