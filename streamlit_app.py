@@ -2,131 +2,85 @@ import streamlit as st
 import yfinance as yf
 import pandas as pd
 import numpy as np
-import os
-from datetime import datetime, date
 
-st.set_page_config(page_title="RSI 24 Exact", layout="wide")
-st.title("📊 ماسح RSI 24 (المطابق رياضياً لـ TradingView)")
+st.set_page_config(page_title="RSI Compare", layout="wide")
+st.title("⚖️ كشف الحقيقة: أيهما يطابق TradingView؟")
 
-# --- الإعدادات ---
+# الإعدادات
 RSI_PERIOD = 24
-FILE_NAME = "tasi_rsi_exact.csv"
+TARGET_STOCK = "1180.SR" # البنك الأهلي (سهم المشكلة)
 
-# القائمة
-TICKERS = {
-    "1180.SR": "الأهلي",
-    "1120.SR": "الراجحي",
-    "2222.SR": "أرامكو",
-    "2010.SR": "سابك",
-    "7010.SR": "STC",
-    "^TASI.SR": "المؤشر العام"
-}
+# --- دالة حساب RSI باستخدام EWM (الأدق والأسرع) ---
+def calculate_rsi_vectorized(series, period):
+    delta = series.diff()
+    gain = delta.where(delta > 0, 0)
+    loss = -delta.where(delta < 0, 0)
+    
+    # محاكاة Wilder's Smoothing باستخدام alpha=1/N
+    # هذه الطريقة تتطابق مع TradingView عند وجود بيانات تاريخية طويلة
+    avg_gain = gain.ewm(alpha=1/period, min_periods=period, adjust=False).mean()
+    avg_loss = loss.ewm(alpha=1/period, min_periods=period, adjust=False).mean()
+    
+    rs = avg_gain / avg_loss
+    rsi = 100 - (100 / (1 + rs))
+    return rsi
 
-# --- دالة RSI اليدوية (Simulating Pine Script RMA) ---
-def calculate_rsi_exact(series, period):
-    # تحويل البيانات إلى قائمة للسرعة في المعالجة
-    prices = series.values
+# --- زر التشغيل ---
+if st.button(f"تحليل سهم {TARGET_STOCK} بكافة الطرق"):
     
-    # حساب التغيرات
-    deltas = np.diff(prices)
+    st.write("1. جاري جلب جميع البيانات التاريخية (Max History)...")
+    # نجلب البيانات الخام والمعدلة معاً
+    df = yf.download(TARGET_STOCK, period="max", interval="1d", auto_adjust=False, progress=False)
     
-    # مصفوفات الأرباح والخسائر
-    gains = np.where(deltas > 0, deltas, 0)
-    losses = np.where(deltas < 0, -deltas, 0)
-    
-    avg_gains = np.zeros_like(prices)
-    avg_losses = np.zeros_like(prices)
-    
-    # --- الخطوة 1: التهيئة (SMA) ---
-    # TradingView يبدأ بحساب متوسط بسيط لأول 24 يوم
-    if len(prices) > period:
-        avg_gains[period] = np.mean(gains[:period])
-        avg_losses[period] = np.mean(losses[:period])
+    if not df.empty:
+        # التعامل مع هيكلة البيانات المعقدة
+        try:
+            # محاولة فك MultiIndex إذا وجد
+            if isinstance(df.columns, pd.MultiIndex):
+                close_raw = df.xs('Close', level=0, axis=1)[TARGET_STOCK]
+                close_adj = df.xs('Adj Close', level=0, axis=1)[TARGET_STOCK]
+            else:
+                close_raw = df['Close']
+                close_adj = df['Adj Close']
+        except:
+             # طريقة بديلة في حال فشل التحديد المباشر
+             close_raw = df['Close']
+             close_adj = df['Adj Close']
+
+        # حذف القيم المفقودة
+        close_raw = close_raw.dropna()
+        close_adj = close_adj.dropna()
+
+        # --- الحساب الأول: على السعر الخام (Close) ---
+        rsi_raw_series = calculate_rsi_vectorized(close_raw, RSI_PERIOD)
+        last_rsi_raw = rsi_raw_series.iloc[-1]
+        last_price_raw = close_raw.iloc[-1]
+
+        # --- الحساب الثاني: على السعر المعدل (Adj Close) ---
+        rsi_adj_series = calculate_rsi_vectorized(close_adj, RSI_PERIOD)
+        last_rsi_adj = rsi_adj_series.iloc[-1]
+        last_price_adj = close_adj.iloc[-1]
+
+        # --- عرض النتائج للمقارنة ---
+        st.subheader("النتيجة النهائية:")
         
-        # --- الخطوة 2: التنعيم الأسي (RMA/Wilder's) ---
-        # المعادلة: (Previous * (n-1) + Current) / n
-        for i in range(period + 1, len(prices)):
-            avg_gains[i] = (avg_gains[i-1] * (period - 1) + gains[i-1]) / period
-            avg_losses[i] = (avg_losses[i-1] * (period - 1) + losses[i-1]) / period
-            
-    # حساب RS و RSI
-    # نتجنب القسمة على صفر
-    with np.errstate(divide='ignore', invalid='ignore'):
-        rs = avg_gains / avg_losses
-        rsi = 100 - (100 / (1 + rs))
-    
-    # استبدال القيم اللانهائية (في حال كان الهبوط صفر)
-    rsi[np.isinf(rsi)] = 100
-    
-    return pd.Series(rsi, index=series.index)
-
-# --- التشغيل ---
-if st.button('🚀 تحديث ومطابقة البيانات'):
-    
-    st.write("جاري المعالجة...")
-    
-    # نطلب فترة '5y' لضمان استقرار المعادلة (لن يؤثر على سرعة العرض)
-    # المعادلة تحتاج لتاريخ طويل لتصل للدقة العشرية المطلوبة
-    data = yf.download(list(TICKERS.keys()), period="5y", interval="1d", group_by='ticker', auto_adjust=False, progress=False)
-    
-    if not data.empty:
-        results = []
+        col1, col2 = st.columns(2)
         
-        for symbol, name in TICKERS.items():
-            try:
-                try:
-                    df = data[symbol].copy()
-                except KeyError:
-                    continue
+        with col1:
+            st.info("الخيار 1: السعر الخام (Raw Close)")
+            st.metric("السعر", f"{last_price_raw:.2f}")
+            st.metric(f"RSI ({RSI_PERIOD})", f"{last_rsi_raw:.2f}")
+            st.caption("يستخدم سعر الشاشة كما هو، بدون خصم توزيعات سابقة.")
 
-                if 'Close' in df.columns:
-                    series = df['Close']
-                elif 'Adj Close' in df.columns:
-                    series = df['Adj Close']
-                else:
-                    continue
-                
-                # تنظيف
-                series = series.dropna()
+        with col2:
+            st.warning("الخيار 2: السعر المعدل (Adj Close)")
+            st.metric("السعر (قد يختلف)", f"{last_price_adj:.2f}")
+            st.metric(f"RSI ({RSI_PERIOD})", f"{last_rsi_adj:.2f}")
+            st.caption("يخصم الأرباح والمنح تاريخياً (غالباً هذا ما يستخدمه التحليل الفني).")
 
-                # نحتاج بيانات كافية
-                if len(series) > RSI_PERIOD + 1:
-                    
-                    # استخدام الدالة اليدوية الجديدة
-                    rsi_series = calculate_rsi_exact(series, RSI_PERIOD)
-                    
-                    last_rsi = rsi_series.iloc[-1]
-                    last_price = series.iloc[-1]
-                    
-                    # التحقق من عدم وجود NaN
-                    if not np.isnan(last_rsi) and last_rsi != 0:
-                        results.append({
-                            "الرمز": symbol,
-                            "الاسم": name,
-                            "السعر": round(last_price, 2),
-                            f"RSI ({RSI_PERIOD})": round(last_rsi, 2)
-                        })
-            except Exception as e:
-                pass
-
-        if results:
-            df_final = pd.DataFrame(results)
-            col_rsi = f"RSI ({RSI_PERIOD})"
-            df_final = df_final.sort_values(by=col_rsi, ascending=False)
-            
-            # تلوين
-            def color_rsi(val):
-                color = 'black'
-                if val >= 70: color = '#d32f2f'
-                elif val <= 30: color = '#388e3c'
-                return f'color: {color}; font-weight: bold'
-
-            st.dataframe(
-                df_final.style.map(color_rsi, subset=[col_rsi])
-                        .format({"السعر": "{:.2f}", col_rsi: "{:.2f}"}),
-                use_container_width=True
-            )
-        else:
-            st.error("لا توجد بيانات كافية للحساب.")
+        st.divider()
+        st.write("👆 **قارن الرقمين أعلاه مع شاشة TradingView وأخبرني أيهما طابق الـ 54.17؟**")
+        
     else:
-        st.error("فشل الاتصال بالمصدر.")
+        st.error("فشل جلب البيانات.")
+
