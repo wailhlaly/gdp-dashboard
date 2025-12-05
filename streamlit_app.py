@@ -1,97 +1,92 @@
 import streamlit as st
+import yfinance as yf
 import pandas as pd
 import numpy as np
-import yfinance as yf
-import pandas_ta as ta
-import os
-from datetime import date, timedelta
 
-# --- إعداد الصفحة (يجب أن يكون في البداية) ---
-st.set_page_config(page_title="ماسح السوق", layout="wide")
+# --- إعداد الصفحة ---
+st.set_page_config(page_title="ماسح السوق السعودي", layout="wide")
+st.title("✅ ماسح RSI (بدون مكتبات خارجية)")
 
-# --- شبكة الأمان لكشف الأخطاء ---
+# --- دالة حساب RSI يدوياً (لتجنب مشاكل المكتبات) ---
+def calculate_rsi(series, period=14):
+    delta = series.diff()
+    gain = (delta.where(delta > 0, 0)).ewm(alpha=1/period, adjust=False).mean()
+    loss = (-delta.where(delta < 0, 0)).ewm(alpha=1/period, adjust=False).mean()
+    rs = gain / loss
+    return 100 - (100 / (1 + rs))
+
+# --- القائمة والبيانات ---
+TICKERS = [
+    "1120.SR", "2222.SR", "2010.SR", "1180.SR", "7010.SR", 
+    "4030.SR", "5110.SR", "4200.SR", "1150.SR", "1010.SR",
+    "^TASI.SR"
+]
+
 try:
-    st.title("📊 فحص حالة التطبيق")
-
-    # قائمة أسهم للتجربة (نقلل العدد للتجربة السريعة)
-    TICKERS = ["1120.SR", "2222.SR", "^TASI.SR"]
+    st.write("جاري جلب البيانات من المصدر...")
     
-    st.write("1. جاري التحقق من المكتبات... ✅")
+    # جلب البيانات لجميع الأسهم مرة واحدة
+    data = yf.download(TICKERS, period="3mo", group_by='ticker', progress=False)
     
-    # --- دالة جلب البيانات ---
-    def get_data():
-        st.write("2. محاولة الاتصال بـ Yahoo Finance... ⏳")
-        start_date = date.today() - timedelta(days=60)
-        # نستخدم download بسيط جداً لتجنب مشاكل الهيكلة
-        data = yf.download(TICKERS, start=start_date, group_by='ticker', progress=False)
+    if data.empty:
+        st.error("فشل الاتصال بالمصدر (Yahoo Finance). حاول لاحقاً.")
+    else:
+        results = []
         
-        if data.empty:
-            st.warning("⚠️ لم يتم جلب أي بيانات! قد يكون هناك حظر مؤقت من المصدر.")
-            return None
-        st.write("3. تم جلب البيانات بنجاح ✅")
-        return data
-
-    df_master = get_data()
-
-    if df_master is not None:
-        rsi_data = []
-        
-        st.write("4. جاري حساب المؤشرات... ⏳")
         for ticker in TICKERS:
             try:
-                # محاولة استخراج السهم (معالجة الأخطاء المحتملة في الهيكلة)
-                try:
-                    df_stock = df_master[ticker].copy()
-                except KeyError:
-                    # في حال عادت البيانات بتركيبة مختلفة (بدون MultiIndex)
-                    if ticker in df_master.columns:
-                        df_stock = df_master  # حالة سهم واحد
+                # استخراج بيانات السهم
+                df_stock = data[ticker].copy() if ticker in data.columns.levels[0] else pd.DataFrame()
+                
+                if df_stock.empty:
+                    # محاولة أخرى في حال لم يكن MultiIndex
+                    if ticker in data.columns: 
+                        df_stock = data # حالة سهم واحد
                     else:
                         continue
 
+                # التأكد من وجود عمود الإغلاق
+                close_col = 'Close' if 'Close' in df_stock.columns else 'Adj Close'
+                
                 # تنظيف البيانات
-                df_stock = df_stock.dropna()
+                df_stock = df_stock.dropna(subset=[close_col])
 
-                if len(df_stock) > 14:
-                    # حساب RSI
-                    # استخدام 'Close' أو 'Adj Close'
-                    close_col = 'Close' if 'Close' in df_stock.columns else 'Adj Close'
-                    rsi_val = ta.rsi(df_stock[close_col], length=14)
+                if len(df_stock) > 20:
+                    # تطبيق معادلة RSI اليدوية
+                    df_stock['RSI'] = calculate_rsi(df_stock[close_col])
                     
-                    if rsi_val is not None:
-                        last_rsi = rsi_val.iloc[-1]
-                        last_price = df_stock[close_col].iloc[-1]
-                        
-                        rsi_data.append({
-                            "الرمز": ticker,
-                            "السعر": round(last_price, 2),
-                            "RSI": round(last_rsi, 2)
-                        })
-            except Exception as e_inner:
-                st.write(f"⚠️ خطأ بسيط في السهم {ticker}: {e_inner}")
-                continue
+                    last_rsi = df_stock['RSI'].iloc[-1]
+                    last_price = df_stock[close_col].iloc[-1]
+                    
+                    results.append({
+                        "الرمز": ticker,
+                        "السعر": last_price,
+                        "RSI": last_rsi
+                    })
+            except Exception as e:
+                continue # تخطي السهم الذي فيه مشكلة
 
-        # عرض الجدول
-        if rsi_data:
-            df_res = pd.DataFrame(rsi_data)
-            st.subheader("النتيجة النهائية:")
+        # --- عرض الجدول النهائي ---
+        if results:
+            df_final = pd.DataFrame(results)
+            df_final = df_final.sort_values(by="RSI", ascending=False)
             
-            # --- التصحيح المحتمل: استخدام applymap بدلاً من map القديمة ---
-            # (هذا غالباً هو سبب المشكلة السابقة)
-            def color_rsi(val):
+            # دالة التلوين البسيطة
+            def highlight_rsi(val):
                 color = 'black'
                 if val > 70: color = 'red'
                 elif val < 30: color = 'green'
                 return f'color: {color}'
-            
-            # استخدام applymap المتوافقة مع جميع النسخ
-            st.dataframe(df_res.style.applymap(color_rsi, subset=['RSI']))
-            st.success("✅ التطبيق يعمل بنجاح!")
+
+            st.subheader("النتائج:")
+            st.dataframe(
+                df_final.style.map(highlight_rsi, subset=['RSI'])
+                        .format({"السعر": "{:.2f}", "RSI": "{:.2f}"}),
+                use_container_width=True
+            )
         else:
-            st.warning("لم يتم حساب RSI لأي سهم.")
+            st.warning("لم يتم العثور على بيانات كافية.")
 
 except Exception as e:
-    # هذا الجزء هو الأهم: سيعرض لك الخطأ الحقيقي
-    st.error("🚨 حدث خطأ أثناء التشغيل:")
-    st.code(e)
-    st.write("صور هذه الشاشة وأرسلها لي لنحل المشكلة فوراً.")
+    st.error(f"حدث خطأ غير متوقع: {e}")
+
