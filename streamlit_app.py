@@ -3,90 +3,80 @@ import yfinance as yf
 import pandas as pd
 import numpy as np
 
-st.set_page_config(page_title="RSI Pine Match", layout="wide")
-st.title("📊 ماسح RSI (بنفس معادلة Pine Script)")
+st.set_page_config(page_title="RSI Debugger", layout="wide")
+st.title("🕵️‍♂️ كاشف الأخطاء: لماذا يختلف الرقم؟")
 
 # --- الإعدادات ---
-# تأكد من وضع نفس الرقم الموجود في TradingView
-RSI_LENGTH = 7
-# السهم للمقارنة
-TARGET_STOCK = "1180.SR" 
+RSI_PERIOD = 24
+TARGET_STOCK = "1180.SR"  # البنك الأهلي
 
-# --- ترجمة دالة RMA من Pine Script إلى Python ---
-def rma(series, length):
-    # RMA في Pine Script تعادل Exponential Moving Average مع alpha = 1/length
-    return series.ewm(alpha=1/length, min_periods=length, adjust=False).mean()
-
-# --- دالة حساب RSI المطابقة للكود المرسل ---
-def calculate_rsi_pine(close_prices, length):
-    # 1. حساب التغير (change(src))
-    delta = close_prices.diff()
+# --- 1. معادلة TradingView الدقيقة (مع الذاكرة) ---
+def rsi_tradingview_logic(series, period):
+    delta = series.diff()
+    gain = delta.clip(lower=0)
+    loss = -delta.clip(upper=0)
     
-    # 2. تحديد الصعود والهبوط
-    # max(change(src), 0)
-    up_move = delta.clip(lower=0)
-    # -min(change(src), 0) -> لاحظ الإشارة السالبة لقلب الرقم
-    down_move = -delta.clip(upper=0)
+    # محاكاة دالة RMA في TradingView
+    # تبدأ بمتوسط بسيط SMA ثم تكمل بالمتوسط الأسي
+    avg_gain = np.zeros_like(series)
+    avg_loss = np.zeros_like(series)
     
-    # 3. تطبيق دالة rma كما في الكود المرسل
-    # up = rma(max(change(src), 0), len)
-    up_avg = rma(up_move, length)
-    # down = rma(-min(change(src), 0), len)
-    down_avg = rma(down_move, length)
+    # البداية: متوسط بسيط
+    avg_gain[period] = gain[1:period+1].mean()
+    avg_loss[period] = loss[1:period+1].mean()
     
-    # 4. حساب RSI
-    # rsi = down == 0 ? 100 : up == 0 ? 0 : 100 - (100 / (1 + up / down))
-    rs = up_avg / down_avg
+    # التكملة: متوسط أسي
+    for i in range(period + 1, len(series)):
+        avg_gain[i] = (avg_gain[i-1] * (period - 1) + gain.iloc[i]) / period
+        avg_loss[i] = (avg_loss[i-1] * (period - 1) + loss.iloc[i]) / period
+        
+    rs = avg_gain / avg_loss
     rsi = 100 - (100 / (1 + rs))
-    
-    return rsi
+    return pd.Series(rsi, index=series.index)
 
-if st.button(f"احسب RSI ({RSI_LENGTH}) للسهم {TARGET_STOCK}"):
+# --- التشغيل ---
+if st.button(f"افحص بيانات {TARGET_STOCK}"):
+    st.info("جاري سحب البيانات...")
     
-    st.write("1. جاري تحميل البيانات التاريخية لضمان دقة دالة RMA...")
-    # ملاحظة هامة: يجب تحميل بيانات كافية (سنتين مثلاً) لكي تستقر دالة rma
-    # لن يؤثر هذا على السرعة، لكنه ضروري للدقة الرياضية
-    df = yf.download(TARGET_STOCK, period="2y", interval="1d", auto_adjust=False, progress=False)
+    # نسحب بيانات كافية (سنة) لكي تعمل المعادلة بشكل صحيح
+    df = yf.download(TARGET_STOCK, period="1y", interval="1d", auto_adjust=False, progress=False)
     
     if not df.empty:
-        # استخراج عمود الإغلاق
+        # تجهيز البيانات
         try:
-            if isinstance(df.columns, pd.MultiIndex):
-                close_series = df.xs('Close', level=0, axis=1)[TARGET_STOCK]
-            else:
-                close_series = df['Close']
+            close_series = df.xs('Close', level=0, axis=1)[TARGET_STOCK]
         except:
-             close_series = df['Close'] # محاولة أخيرة
-
+            close_series = df['Close']
+            
         close_series = close_series.dropna()
         
-        # --- الحساب ---
-        rsi_series = calculate_rsi_pine(close_series, RSI_LENGTH)
+        # حساب RSI
+        rsi_series = rsi_tradingview_logic(close_series, RSI_PERIOD)
         
-        # استخراج آخر قيمة
-        last_rsi = rsi_series.iloc[-1]
-        last_price = close_series.iloc[-1]
-        
-        # --- العرض ---
-        st.subheader("النتيجة النهائية:")
-        col1, col2 = st.columns(2)
-        
-        col1.metric("سعر الإغلاق", f"{last_price:.2f}")
-        
-        # تلوين النتيجة
-        rsi_color = "normal"
-        if last_rsi > 70: rsi_color = "inverse" # أحمر/تحذير
-        elif last_rsi < 30: rsi_color = "normal" # أخضر/جيد
-        
-        col2.metric(f"RSI ({RSI_LENGTH})", f"{last_rsi:.2f}")
-        
-        st.success(f"""
-        **تم استخدام المعادلة التالية (ترجمة حرفية لكودك):**
-        1. Source: Close
-        2. Up = RMA(change_up, {RSI_LENGTH})
-        3. Down = RMA(change_down, {RSI_LENGTH})
-        4. RSI = 100 - (100 / (1 + Up/Down))
-        """)
+        # --- عرض جدول "الحقيقة" ---
+        st.subheader("🧐 دقق في هذا الجدول:")
+        st.write("قارن آخر صف في الجدول مع شاشة TradingView:")
 
+        # نأخذ آخر 5 أيام
+        last_5 = pd.DataFrame({
+            'التاريخ': close_series.index[-5:].strftime('%Y-%m-%d'),
+            'سعر الإغلاق (Yahoo)': close_series.iloc[-5:].values.round(2),
+            f'قيمة RSI ({RSI_PERIOD})': rsi_series.iloc[-5:].values.round(2)
+        })
+        
+        st.table(last_5)
+        
+        # استنتاج تلقائي
+        last_date_code = last_5.iloc[-1]['التاريخ']
+        last_price_code = last_5.iloc[-1]['سعر الإغلاق (Yahoo)']
+        
+        st.warning(f"""
+        **التشخيص:**
+        1. **التاريخ:** الكود يقرأ آخر شمعة بتاريخ: **{last_date_code}**. هل هذا هو تاريخ اليوم؟
+           - (إذا كان تاريخ أمس، فهذا هو سبب اختلاف الرقم، Yahoo متأخر).
+        2. **السعر:** الكود يرى السعر: **{last_price_code}**. هل يطابق السعر في شاشتك؟
+           - (إذا كان السعر مختلفاً، فالرقم الناتج سيكون مختلفاً حتماً).
+        """)
+        
     else:
-        st.error("فشل الاتصال بالمصدر.")
+        st.error("لم يتم جلب بيانات.")
