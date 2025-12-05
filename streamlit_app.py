@@ -2,121 +2,161 @@ import streamlit as st
 import yfinance as yf
 import pandas as pd
 import numpy as np
+import os
+from datetime import datetime, date
 
 # --- إعداد الصفحة ---
-st.set_page_config(page_title="محلل السوق السعودي", layout="wide")
-st.title("📊 تحليل RSI للسوق السعودي")
+st.set_page_config(page_title="ماسح RSI 14", layout="wide")
+st.title("📊 ماسح الأسهم السعودية (RSI 14) مع الحفظ الذكي")
 
-# --- دالة حساب RSI (نسخة مُحسنة) ---
-def calculate_rsi(data, window=14):
-    delta = data.diff()
+# --- إعدادات ---
+RSI_PERIOD = 14
+FILE_NAME = "tasi_data.csv"
+
+# قائمة ببعض الأسهم القياسية (يمكنك زيادتها لتشمل السوق كاملاً)
+TICKERS = {
+    "1120.SR": "الراجحي", "2222.SR": "أرامكو", "2010.SR": "سابك",
+    "1180.SR": "الأهلي", "7010.SR": "STC", "1150.SR": "الإنماء",
+    "1211.SR": "معادن", "2020.SR": "سابك للمغذيات", "4030.SR": "البحري",
+    "4190.SR": "جرير", "4200.SR": "الدريس", "2380.SR": "رابغ",
+    "1010.SR": "الرياض", "5110.SR": "الكهرباء", "^TASI.SR": "المؤشر العام"
+}
+
+# --- دالة حساب RSI يدوياً (DQM) ---
+def calculate_rsi(series, period=14):
+    delta = series.diff()
     gain = (delta.where(delta > 0, 0)).fillna(0)
     loss = (-delta.where(delta < 0, 0)).fillna(0)
-
-    # استخدام المتوسط المتحرك الأسي (Exponential Moving Average)
-    avg_gain = gain.ewm(span=window, adjust=False).mean()
-    avg_loss = loss.ewm(span=window, adjust=False).mean()
-
+    
+    # استخدام معادلة EMA (الأكثر دقة للتحليل الفني)
+    avg_gain = gain.ewm(span=period, adjust=False).mean()
+    avg_loss = loss.ewm(span=period, adjust=False).mean()
+    
     rs = avg_gain / avg_loss
     rsi = 100 - (100 / (1 + rs))
     return rsi
 
-# --- قائمة الأسهم ---
-# يمكنك إضافة المزيد هنا
-TICKERS = {
-    "1120.SR": "الراجحي",
-    "2222.SR": "أرامكو",
-    "2010.SR": "سابك",
-    "1180.SR": "الأهلي",
-    "7010.SR": "STC",
-    "4030.SR": "البحري",
-    "5110.SR": "كهرباء السعودية",
-    "4200.SR": "الدريس",
-    "^TASI.SR": "المؤشر العام"
-}
-
-# --- زر التشغيل ---
-if st.button('🔄 تحديث البيانات وحساب المؤشرات'):
+# --- دالة إدارة البيانات (الحفظ والاسترجاع) ---
+def get_market_data(tickers_dict):
+    today_str = date.today().strftime("%Y-%m-%d")
     
-    results = []
-    progress_bar = st.progress(0)
-    status_text = st.empty()
-    
-    # حلقة لجلب بيانات كل سهم على حدة (أكثر استقراراً)
-    for i, (symbol, name) in enumerate(TICKERS.items()):
-        status_text.text(f"جاري تحليل: {name}...")
-        
+    # 1. محاولة القراءة من الملف المحلي
+    if os.path.exists(FILE_NAME):
         try:
-            # جلب بيانات سنة كاملة لضمان دقة الحساب
-            stock_data = yf.download(symbol, period="1y", interval="1d", progress=False)
+            # قراءة الملف لمعرفة تاريخ آخر تحديث
+            # سنعتمد على "وقت تعديل الملف" في النظام
+            file_time = os.path.getmtime(FILE_NAME)
+            file_date = datetime.fromtimestamp(file_time).date()
             
-            # التأكد من أن البيانات ليست فارغة
-            if not stock_data.empty and len(stock_data) > 20:
-                
-                # التعامل مع مشاكل تسمية الأعمدة
-                if 'Close' in stock_data.columns:
-                    close_prices = stock_data['Close']
-                elif 'Adj Close' in stock_data.columns:
-                    close_prices = stock_data['Adj Close']
-                else:
-                    # محاولة أخيرة لاستخراج العمود الأول كأنه الإغلاق
-                    close_prices = stock_data.iloc[:, 0]
-
-                # --- حساب RSI ---
-                # نقوم بتحويل البيانات إلى سلسلة رقمية بحتة لتجنب الأخطاء
-                close_series = pd.Series(close_prices.values.flatten(), index=stock_data.index)
-                
-                rsi_series = calculate_rsi(close_series)
-                
-                # استخراج آخر قيمة
-                last_rsi = rsi_series.iloc[-1]
-                last_price = close_series.iloc[-1]
-                
-                # التحقق أن القيمة ليست NaN
-                if not np.isnan(last_rsi):
-                    results.append({
-                        "الرمز": symbol,
-                        "الاسم": name,
-                        "السعر": round(float(last_price), 2),
-                        "RSI": round(float(last_rsi), 2)
-                    })
+            if file_date == date.today():
+                st.toast("📂 يتم تحميل البيانات من الملف المحفوظ (سريع)...")
+                df = pd.read_csv(FILE_NAME, index_col=0, header=[0, 1], parse_dates=True)
+                return df
+            else:
+                st.toast("⚠️ البيانات قديمة.. جاري التحديث من المصدر...")
         except Exception as e:
-            print(f"Error analyzing {symbol}: {e}")
-            continue
-        
-        # تحديث شريط التقدم
-        progress_bar.progress((i + 1) / len(TICKERS))
+            st.warning("حدث خطأ في قراءة الملف، سيتم إعادة التحميل.")
 
-    status_text.text("✅ تم الانتهاء!")
-    progress_bar.empty()
+    # 2. التحميل من الإنترنت (في حال عدم وجود ملف أو البيانات قديمة)
+    tickers_list = list(tickers_dict.keys())
+    st.write("⏳ جاري سحب بيانات سنة كاملة لضمان دقة RSI...")
+    
+    # تحميل جماعي سريع
+    df = yf.download(tickers_list, period="1y", group_by='ticker', progress=True)
+    
+    # حفظ البيانات للمرات القادمة
+    if not df.empty:
+        df.to_csv(FILE_NAME)
+        st.success(f"✅ تم تحديث البيانات وحفظها في {FILE_NAME}")
+    
+    return df
 
-    # --- عرض النتائج ---
-    if results:
-        df_final = pd.DataFrame(results)
+# --- تشغيل البرنامج ---
+if st.button('🚀 تشغيل الفحص'):
+    
+    data_master = get_market_data(TICKERS)
+    
+    if data_master is not None and not data_master.empty:
+        results = []
         
-        # ترتيب حسب RSI من الأكبر للأصغر
-        df_final = df_final.sort_values(by="RSI", ascending=False)
+        # شريط تقدم
+        progress_bar = st.progress(0)
+        total_stocks = len(TICKERS)
         
-        # دالة التلوين
-        def color_rsi(val):
-            color = 'white'
-            if val >= 70:
-                color = '#ff4b4b' # أحمر (تشبع شرائي)
-            elif val <= 30:
-                color = '#09ab3b' # أخضر (تشبع بيعي)
-            return f'color: {color}; font-weight: bold;'
+        for i, (symbol, name) in enumerate(TICKERS.items()):
+            try:
+                # استخراج بيانات السهم الواحد من الجدول الكبير
+                # ملاحظة: yfinance multi-index structure: (Ticker, PriceType) or (PriceType, Ticker)
+                # نحاول الوصول للبيانات بمرونة
+                try:
+                    df_stock = data_master[symbol].copy()
+                except KeyError:
+                    continue # السهم غير موجود
 
-        st.subheader("📋 ملخص السوق (الأعلى RSI في الأعلى)")
+                # تنظيف
+                if 'Close' in df_stock.columns:
+                    series = df_stock['Close']
+                elif 'Adj Close' in df_stock.columns:
+                    series = df_stock['Adj Close']
+                else:
+                    continue
+                
+                series = series.dropna()
+
+                if len(series) > RSI_PERIOD:
+                    # حساب RSI
+                    rsi_series = calculate_rsi(series, period=RSI_PERIOD)
+                    last_rsi = rsi_series.iloc[-1]
+                    last_price = series.iloc[-1]
+                    
+                    if not np.isnan(last_rsi):
+                        results.append({
+                            "الرمز": symbol,
+                            "الاسم": name,
+                            "السعر": last_price,
+                            "RSI (14)": last_rsi
+                        })
+            except Exception as e:
+                pass
+            
+            # تحديث الشريط
+            progress_bar.progress((i + 1) / total_stocks)
         
-        st.dataframe(
-            df_final.style.map(color_rsi, subset=['RSI'])
-                    .format({"السعر": "{:.2f}", "RSI": "{:.2f}"}),
-            use_container_width=True,
-            hide_index=True # إخفاء عمود الترقيم الجانبي لشكل أنظف
-        )
+        progress_bar.empty()
+
+        # --- العرض والترتيب ---
+        if results:
+            df_final = pd.DataFrame(results)
+            # الترتيب: من الأكبر للأصغر
+            df_final = df_final.sort_values(by="RSI (14)", ascending=False)
+            
+            # التلوين
+            def color_rsi(val):
+                color = 'black'
+                weight = 'normal'
+                if val >= 70:
+                    color = '#d32f2f' # أحمر غامق
+                    weight = 'bold'
+                elif val <= 30:
+                    color = '#388e3c' # أخضر غامق
+                    weight = 'bold'
+                return f'color: {color}; font-weight: {weight}'
+
+            st.dataframe(
+                df_final.style.map(color_rsi, subset=['RSI (14)'])
+                        .format({"السعر": "{:.2f}", "RSI (14)": "{:.2f}"}),
+                use_container_width=True,
+                height=600
+            )
+            
+            # زر لتحميل النتائج
+            csv = df_final.to_csv(index=False).encode('utf-8')
+            st.download_button("📥 تحميل قائمة النتائج CSV", csv, "rsi_scan_results.csv", "text/csv")
+            
+        else:
+            st.error("لم يتم العثور على نتائج.")
     else:
-        st.error("لم نتمكن من حساب البيانات. قد يكون السوق مغلقاً أو هناك مشكلة في المصدر.")
-
+        st.error("فشل في جلب البيانات.")
 else:
-    st.info("اضغط على الزر أعلاه لبدء التحليل.")
+    st.info("اضغط الزر للبدء. سيتم حفظ البيانات لتسريع العمليات القادمة.")
 
