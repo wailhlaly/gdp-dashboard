@@ -4,28 +4,111 @@ import pandas as pd
 import numpy as np
 
 # --- إعداد الصفحة ---
-st.set_page_config(page_title="RSI Pro Interactive", layout="wide")
-st.title("📊 ماسح RSI التفاعلي (مع سجل 24 يوم)")
+st.set_page_config(page_title="TASI Pro Screener", layout="wide")
+st.title("📊 ماسح السوق السعودي الشامل (TASI All-In-One)")
 
 # --- الإعدادات ---
 RSI_PERIOD = 24
 
-# قائمة الأسهم
+# --- قائمة الأسهم الشاملة (الأكثر نشاطاً وقيادية) ---
 TICKERS = {
-    "1180.SR": "الأهلي",
-    "1120.SR": "الراجحي",
+    # --- المؤشرات ---
+    "^TASI.SR": "المؤشر العام",
+    
+    # --- الطاقة والمرافق ---
     "2222.SR": "أرامكو",
-    "2010.SR": "سابك",
-    "7010.SR": "STC",
-    "1150.SR": "الإنماء",
-    "1211.SR": "معادن",
-    "4030.SR": "البحري",
+    "2030.SR": "المصافي",
     "4200.SR": "الدريس",
+    "5110.SR": "الكهرباء",
+    "2080.SR": "الغاز",
+    "4030.SR": "البحري",
+    
+    # --- المواد الأساسية (بتروكيماويات ومعادن) ---
+    "2010.SR": "سابك",
+    "1211.SR": "معادن",
+    "2020.SR": "سابك للمغذيات",
+    "2310.SR": "سبكيم",
+    "2060.SR": "التصنيع",
+    "2290.SR": "ينساب",
+    "2001.SR": "كيمانول",
+    "2170.SR": "اللجين",
+    "2330.SR": "المتقدمة",
+    "2350.SR": "كيان",
+    "2380.SR": "رابغ",
+    
+    # --- البنوك والخدمات المالية ---
+    "1120.SR": "الراجحي",
+    "1180.SR": "الأهلي",
+    "1010.SR": "الرياض",
+    "1150.SR": "الإنماء",
+    "1060.SR": "الأول (ساب)",
+    "1140.SR": "البلاد",
+    "1030.SR": "الاستثمار",
+    "1020.SR": "الجزيرة",
+    "1080.SR": "العربي",
+    "1050.SR": "الفرنسي",
+    "1183.SR": "سهل", # أملاك سابقاً أو شركات التمويل
+    "1111.SR": "تداول",
+    
+    # --- الاتصالات ---
+    "7010.SR": "STC",
+    "7020.SR": "موبايلي",
+    "7030.SR": "زين",
+    "7200.SR": "سلوشنز",
+    "7040.SR": "عذيب",
+    
+    # --- الأسمنت ---
+    "3030.SR": "أسمنت السعودية",
+    "3040.SR": "أسمنت القصيم",
+    "3050.SR": "أسمنت الجنوب",
+    "3060.SR": "أسمنت ينبع",
+    "3010.SR": "أسمنت العربية",
+    "3020.SR": "أسمنت اليمامة",
+    "3080.SR": "أسمنت الشرقية",
+    
+    # --- التجزئة والأغذية ---
     "4190.SR": "جرير",
-    "^TASI.SR": "المؤشر العام"
+    "4001.SR": "العثيم",
+    "4164.SR": "النهدي",
+    "2280.SR": "المراعي",
+    "2270.SR": "سدافكو",
+    "6002.SR": "هرفي",
+    "4160.SR": "تموين (التموين)",
+    "6010.SR": "نادك",
+    "6020.SR": "جاكو",
+    "6040.SR": "تبوك الزراعية",
+    
+    # --- الصحة والتأمين ---
+    "4002.SR": "المواساة",
+    "4004.SR": "دلة",
+    "4007.SR": "الحمادي",
+    "4009.SR": "الألماني",
+    "4013.SR": "سليمان الحبيب",
+    "8010.SR": "التعاونية",
+    "8210.SR": "بوبا",
+    "8230.SR": "الراجحي تكافل",
+    "8012.SR": "جزيرة تكافل",
+    
+    # --- التطوير العقاري والريت ---
+    "4300.SR": "دار الأركان",
+    "4250.SR": "جبل عمر",
+    "4220.SR": "إعمار",
+    "4321.SR": "المراكز",
+    "4230.SR": "البحر الأحمر",
+    "4090.SR": "طيبة",
+    "4100.SR": "مكة",
+    "4330.SR": "الرياض ريت",
+    "4340.SR": "الراجحي ريت",
+    
+    # --- السياحة والخدمات الأخرى ---
+    "1810.SR": "سيرا",
+    "1830.SR": "وقت اللياقة",
+    "4070.SR": "تهامة",
+    "4210.SR": "الأبحاث",
+    "4080.SR": "سناد القابضة"
 }
 
-# --- دالة RMA (المطابقة لـ Pine Script) ---
+# --- دالة RMA (Pine Script Logic) ---
 def calculate_rsi_rma(series, period):
     delta = series.diff()
     gain = delta.clip(lower=0)
@@ -38,150 +121,165 @@ def calculate_rsi_rma(series, period):
     rsi = 100 - (100 / (1 + rs))
     return rsi
 
-# --- تهيئة الجلسة لحفظ البيانات (Caching) ---
+# --- تهيئة الجلسة ---
 if 'market_data' not in st.session_state:
     st.session_state['market_data'] = {}
+if 'summary' not in st.session_state:
+    st.session_state['summary'] = []
 
-# --- زر التحديث ---
-col_btn, col_info = st.columns([1, 4])
+# --- الواجهة ---
+col_btn, col_count = st.columns([1, 4])
 with col_btn:
-    if st.button('🔄 تحديث ومسح السوق'):
-        st.session_state['market_data'] = {} # تصفير البيانات القديمة
+    start_btn = st.button('🚀 فحص شامل للسوق')
+
+with col_count:
+    st.caption(f"عدد الشركات المدرجة للفحص: {len(TICKERS)}")
+
+if start_btn:
+    st.session_state['market_data'] = {}
+    st.session_state['summary'] = []
+    
+    status_text = st.empty()
+    progress_bar = st.progress(0)
+    
+    # تحميل جماعي ذكي (دفعة واحدة لتسريع العملية)
+    try:
+        status_text.text("⏳ جاري الاتصال بقاعدة البيانات وسحب سجلات سنتين...")
         
-        with st.spinner("جاري سحب بيانات سنتين لضمان الدقة..."):
-            try:
-                # سحب البيانات
-                raw_data = yf.download(list(TICKERS.keys()), period="2y", interval="1d", group_by='ticker', auto_adjust=False, progress=False)
-                
-                if not raw_data.empty:
-                    processed_data = {}
-                    summary_list = []
-                    
-                    # معالجة كل سهم
-                    for symbol, name in TICKERS.items():
-                        try:
-                            # استخراج البيانات الخاصة بالسهم
-                            try:
-                                df = raw_data[symbol].copy()
-                            except KeyError:
-                                continue
+        # التغيير هنا: التحميل الجماعي أسرع بكثير من حلقة التكرار
+        # threads=True يفعل التحميل المتوازي
+        raw_data = yf.download(list(TICKERS.keys()), period="2y", interval="1d", group_by='ticker', auto_adjust=False, threads=True, progress=False)
+        
+        if not raw_data.empty:
+            processed_count = 0
+            
+            for symbol, name in TICKERS.items():
+                try:
+                    # محاولة استخراج بيانات الشركة
+                    try:
+                        df = raw_data[symbol].copy()
+                    except KeyError:
+                        continue # الشركة قد لا يكون لها بيانات (موقوفة مثلاً)
 
-                            # تحديد عمود الإغلاق
-                            if 'Close' in df.columns:
-                                df = df.rename(columns={'Close': 'Close_Price'}) # إعادة تسمية لتجنب التعارض
-                                series = df['Close_Price']
-                            elif 'Adj Close' in df.columns:
-                                df = df.rename(columns={'Adj Close': 'Close_Price'})
-                                series = df['Close_Price']
-                            else:
-                                continue
+                    # توحيد اسم العمود
+                    target_col = None
+                    if 'Close' in df.columns: target_col = 'Close'
+                    elif 'Adj Close' in df.columns: target_col = 'Adj Close'
+                    
+                    if target_col:
+                        # تنظيف البيانات
+                        series = df[target_col].dropna()
+                        
+                        # نحتاج بيانات كافية للحساب
+                        if len(series) > RSI_PERIOD + 20:
+                            # حساب RSI
+                            rsi_values = calculate_rsi_rma(series, RSI_PERIOD)
                             
-                            df = df.dropna()
-
-                            if len(series) > RSI_PERIOD + 20:
-                                # حساب RSI وإضافته كعمود في الداتا فريم
-                                df['RSI'] = calculate_rsi_rma(series, RSI_PERIOD)
-                                
-                                last_rsi = df['RSI'].iloc[-1]
-                                last_price = series.iloc[-1]
-                                
-                                # حفظ البيانات الكاملة في الذاكرة (للاستدعاء عند الضغط)
-                                processed_data[name] = df 
-                                
-                                if not np.isnan(last_rsi):
-                                    summary_list.append({
-                                        "الاسم": name,
-                                        "الرمز": symbol,
-                                        "السعر الحالي": last_price,
-                                        f"RSI ({RSI_PERIOD})": last_rsi
-                                    })
-                        except Exception as e:
-                            pass
+                            # تخزين البيانات في الداتا فريم
+                            df['RSI'] = rsi_values
+                            df['Close_Clean'] = series
+                            
+                            last_rsi = rsi_values.iloc[-1]
+                            last_price = series.iloc[-1]
+                            
+                            # الحفظ في الذاكرة
+                            st.session_state['market_data'][name] = df
+                            
+                            if not np.isnan(last_rsi):
+                                st.session_state['summary'].append({
+                                    "الاسم": name,
+                                    "الرمز": symbol,
+                                    "آخر سعر": last_price,
+                                    f"RSI ({RSI_PERIOD})": last_rsi
+                                })
                     
-                    # حفظ النتائج في الجلسة
-                    st.session_state['market_data'] = processed_data
-                    st.session_state['summary'] = summary_list
-                    st.success("تم التحديث بنجاح!")
-                else:
-                    st.error("لم يتم العثور على بيانات.")
-            except Exception as e:
-                st.error(f"حدث خطأ: {e}")
+                    processed_count += 1
+                    progress_bar.progress(processed_count / len(TICKERS))
+                    
+                except Exception as e:
+                    pass
+            
+            progress_bar.empty()
+            status_text.success("✅ تم الانتهاء من فحص السوق!")
+            
+        else:
+            status_text.error("فشل التحميل الجماعي. قد يكون هناك ضغط على المصدر.")
+            
+    except Exception as e:
+        status_text.error(f"حدث خطأ غير متوقع: {e}")
 
-# --- عرض النتائج ---
-if 'summary' in st.session_state and st.session_state['summary']:
+# --- العرض ---
+if st.session_state['summary']:
     
-    # 1. جدول الملخص
-    st.subheader("📋 ملخص السوق (مرتب حسب التشبع)")
+    # 1. الجدول الرئيسي
+    st.subheader("📋 نتائج الفحص الشامل")
     
-    df_summary = pd.DataFrame(st.session_state['summary'])
-    df_summary = df_summary.sort_values(by=f"RSI ({RSI_PERIOD})", ascending=False)
+    df_sum = pd.DataFrame(st.session_state['summary'])
+    df_sum = df_sum.sort_values(by=f"RSI ({RSI_PERIOD})", ascending=False)
     
-    # تنسيق الألوان المطور
-    def highlight_rsi_advanced(val):
-        color = '#ffffff' # لون الخط الافتراضي (أبيض)
-        bg_color = ''     # لون الخلفية
+    # دالة التلوين
+    def highlight_rsi(val):
+        bg = ''
+        color = '#d1d1d1' # رمادي فاتح للنصوص العادية
         weight = 'normal'
         
         if val >= 70:
-            bg_color = '#8B0000' # أحمر غامق (خلفية)
+            bg = '#8B0000' # أحمر غامق
             color = 'white'
             weight = 'bold'
         elif val <= 30:
-            bg_color = '#006400' # أخضر غامق (خلفية)
+            bg = '#006400' # أخضر غامق
             color = 'white'
             weight = 'bold'
         elif 30 < val < 40:
-             color = '#90EE90' # أخضر فاتح (نص فقط)
+             color = '#90EE90' # أخضر فاتح
+             weight = 'bold'
         elif 60 < val < 70:
-             color = '#FF7F7F' # أحمر فاتح (نص فقط)
+             color = '#FF7F7F' # أحمر فاتح
+             weight = 'bold'
              
         style = f'color: {color}; font-weight: {weight};'
-        if bg_color:
-            style += f' background-color: {bg_color}; border-radius: 5px;'
+        if bg: style += f' background-color: {bg}; border-radius: 4px;'
         return style
 
     st.dataframe(
-        df_summary.style.map(highlight_rsi_advanced, subset=[f"RSI ({RSI_PERIOD})"])
-                  .format({"السعر الحالي": "{:.2f}", f"RSI ({RSI_PERIOD})": "{:.2f}"}),
-        use_container_width=True
+        df_sum.style.map(highlight_rsi, subset=[f"RSI ({RSI_PERIOD})"])
+                  .format({"آخر سعر": "{:.2f}", f"RSI ({RSI_PERIOD})": "{:.2f}"}),
+        use_container_width=True,
+        height=500
     )
     
-    st.divider()
-
-    # 2. ميزة استدعاء التفاصيل (التفاعل)
-    st.subheader("🔎 تفاصيل الأسعار (آخر 24 يوم)")
+    st.markdown("---")
     
-    # قائمة منسدلة لاختيار الشركة
-    selected_company = st.selectbox(
-        "اختر الشركة لعرض سجل الأسعار والـ RSI:",
-        options=[item['الاسم'] for item in st.session_state['summary']],
-        index=0
-    )
+    # 2. التفاصيل التفاعلية
+    st.subheader("🔍 تحليل عميق لشركة محددة")
     
-    if selected_company:
-        # استرجاع الداتا فريم المحفوظة لهذه الشركة
-        stock_df = st.session_state['market_data'][selected_company]
+    company_list = [d['الاسم'] for d in st.session_state['summary']]
+    selected_comp = st.selectbox("اختر الشركة لعرض سجل 24 يوم:", company_list)
+    
+    if selected_comp:
+        df_details = st.session_state['market_data'][selected_comp]
         
-        # استخراج آخر 24 يوم فقط
-        last_24_days = stock_df.tail(24).copy()
+        # تجهيز آخر 24 يوم
+        last_24 = df_details.tail(24).sort_index(ascending=False)
         
-        # ترتيب الأعمدة للعرض
-        # نحاول العثور على الأعمدة المتاحة (Open, High, Low, Close_Price, RSI)
-        cols_to_show = ['Close_Price', 'RSI']
-        if 'Open' in last_24_days.columns: cols_to_show.insert(0, 'Open')
-        if 'High' in last_24_days.columns: cols_to_show.insert(1, 'High')
-        if 'Low' in last_24_days.columns: cols_to_show.insert(2, 'Low')
+        # اختيار الأعمدة
+        cols = ['Close_Clean', 'RSI']
+        if 'Open' in last_24.columns: cols.insert(0, 'Open')
+        if 'High' in last_24.columns: cols.insert(1, 'High')
+        if 'Low' in last_24.columns: cols.insert(2, 'Low')
         
-        display_df = last_24_days[cols_to_show].sort_index(ascending=False) # الأحدث في الأعلى
+        # إعادة تسمية للعرض
+        last_24 = last_24[cols].rename(columns={'Close_Clean': 'Close'})
         
-        # عرض البيانات مع التلوين
-        st.write(f"سجل بيانات **{selected_company}**:")
+        st.write(f"سجل **{selected_comp}**:")
         st.dataframe(
-            display_df.style.map(highlight_rsi_advanced, subset=['RSI'])
-                      .format("{:.2f}"),
-            use_container_width=True,
-            height=400 # ارتفاع مناسب لعرض 24 صف
+            last_24.style.map(highlight_rsi, subset=['RSI'])
+                     .format("{:.2f}"),
+            use_container_width=True
         )
 
 else:
-    st.info("اضغط على زر 'تحديث ومسح السوق' للبدء.")
+    if not start_btn:
+        st.info("اضغط الزر أعلاه لبدء تحميل وتحليل بيانات السوق.")
+
