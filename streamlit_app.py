@@ -6,13 +6,13 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import time
 
-# --- 1. إعداد الصفحة وتصميم الوضع الليلي (Dark Mode) ---
+# --- 1. إعداد الصفحة والوضع الليلي (Dark Mode) ---
 st.set_page_config(page_title="Saudi Pro Dark", layout="wide", initial_sidebar_state="expanded")
 
-# CSS متقدم لإجبار الألوان الداكنة
+# CSS متقدم لإجبار الألوان الداكنة وإصلاح المظهر الأبيض
 st.markdown("""
 <style>
-    /* فرض الخلفية الداكنة */
+    /* إجبار الخلفية الداكنة على كامل التطبيق */
     .stApp {
         background-color: #0e1117;
         color: #e0e0e0;
@@ -48,6 +48,25 @@ st.markdown("""
         color: white;
         border: none;
         width: 100%;
+        font-weight: bold;
+    }
+    div.stButton > button:hover {
+        background-color: #1e53e5;
+    }
+    
+    /* التبويبات */
+    .stTabs [data-baseweb="tab-list"] {
+        gap: 10px;
+        background-color: transparent;
+    }
+    .stTabs [data-baseweb="tab"] {
+        background-color: #1d212b;
+        color: #e0e0e0;
+        border-radius: 4px;
+    }
+    .stTabs [aria-selected="true"] {
+        background-color: #2962ff !important;
+        color: white !important;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -59,18 +78,24 @@ with st.sidebar:
     EMA_PERIOD = st.number_input("فترة EMA", value=8)
     st.info("اضغط زر التشغيل لبدء التحليل.")
 
-# --- 3. القائمة (عينة للتجربة السريعة - أضف قائمتك الكاملة هنا) ---
-# وضعت لك عينة لضمان سرعة التجربة، يمكنك لصق القائمة الطويلة مكانها
+# --- 3. القائمة الكاملة (تم إدراج العينة، يمكنك لصق قائمتك الكاملة هنا) ---
+# سأضع أهم الأسهم هنا لتضمن عمل الكود، أضف باقي الـ 200 شركة هنا
 TICKERS = {
-    "1180.SR": "الأهلي", "1120.SR": "الراجحي", "2222.SR": "أرامكو", "2010.SR": "سابك",
-    "7010.SR": "STC", "1150.SR": "الإنماء", "1211.SR": "معادن", "4030.SR": "البحري",
-    "4200.SR": "الدريس", "4190.SR": "جرير", "4002.SR": "المواساة", "2280.SR": "المراعي",
+    # بنوك
+    "1180.SR": "الأهلي", "1120.SR": "الراجحي", "1010.SR": "الرياض", "1150.SR": "الإنماء", 
+    # طاقة ومواد
+    "2222.SR": "أرامكو", "2010.SR": "سابك", "1211.SR": "معادن", "2020.SR": "سابك للمغذيات", "4030.SR": "البحري",
+    # اتصالات وتقنية
+    "7010.SR": "STC", "7020.SR": "موبايلي", "7202.SR": "علم",
+    # تجزئة وخدمات
+    "4190.SR": "جرير", "4200.SR": "الدريس", "4002.SR": "المواساة", "2280.SR": "المراعي",
+    # مؤشر
     "^TASI.SR": "المؤشر العام"
 }
 
 # --- 4. الدوال الحسابية ---
 def calculate_indicators(df):
-    # RSI (RMA Method - Like TradingView)
+    # RSI
     delta = df['Close'].diff()
     gain = delta.clip(lower=0)
     loss = -delta.clip(upper=0)
@@ -88,24 +113,33 @@ def calculate_indicators(df):
     df['MACD'] = exp1 - exp2
     df['Signal_Line'] = df['MACD'].ewm(span=9, adjust=False).mean()
     
-    # نسبة التغير (Change) - تم توحيد الاسم هنا
+    # نسبة التغير (Change) - نستخدم مفتاح إنجليزي لضمان عدم حدوث KeyError
     df['Change'] = df['Close'].pct_change() * 100
     
     return df
 
 # --- 5. التشغيل والواجهة ---
-st.title("📊 محلل السوق السعودي (النسخة المصححة)")
+st.title("📊 محلل السوق السعودي (النسخة المستقرة)")
 
-if st.button("🚀 تحديث البيانات"):
+# إدارة الذاكرة
+if 'data' not in st.session_state: st.session_state['data'] = []
+if 'signals' not in st.session_state: st.session_state['signals'] = []
+if 'history' not in st.session_state: st.session_state['history'] = {}
+
+if st.button("🚀 تحديث البيانات (Scan Market)"):
+    # تصفير البيانات القديمة
     st.session_state['data'] = []
     st.session_state['signals'] = []
     st.session_state['history'] = {}
     
     progress_bar = st.progress(0)
+    status_text = st.empty()
+    
     tickers_list = list(TICKERS.keys())
     
     # تحميل البيانات
     try:
+        status_text.text("جاري الاتصال بقاعدة البيانات...")
         raw_data = yf.download(tickers_list, period="6mo", interval="1d", group_by='ticker', auto_adjust=False, threads=True, progress=False)
         
         if not raw_data.empty:
@@ -129,12 +163,12 @@ if st.button("🚀 تحديث البيانات"):
                             # حفظ البيانات للشارت
                             st.session_state['history'][name] = df
                             
-                            # تخزين الملخص (لاحظ استخدام المفاتيح الإنجليزية لتجنب KeyError)
+                            # تخزين الملخص (استخدام مفاتيح إنجليزية حصراً هنا لمنع KeyError)
                             st.session_state['data'].append({
                                 "Name": name,
                                 "Symbol": symbol,
                                 "Price": last_row['Close'],
-                                "Change": last_row['Change'], # هذا هو المفتاح الذي سبب المشكلة سابقاً
+                                "Change": last_row['Change'], # تصحيح الخطأ السابق
                                 "RSI": last_row['RSI'],
                                 "MACD": last_row['MACD'],
                                 "Signal_Line": last_row['Signal_Line']
@@ -158,11 +192,13 @@ if st.button("🚀 تحديث البيانات"):
                 except: continue
                 progress_bar.progress((i + 1) / len(tickers_list))
                 
-    except Exception as e: st.error(f"خطأ: {e}")
+    except Exception as e: st.error(f"خطأ في التحميل: {e}")
+    
     progress_bar.empty()
+    status_text.empty()
 
 # --- 6. عرض النتائج ---
-if 'data' in st.session_state and st.session_state['data']:
+if st.session_state['data']:
     df_all = pd.DataFrame(st.session_state['data'])
     
     # الإحصائيات العلوية
@@ -170,7 +206,7 @@ if 'data' in st.session_state and st.session_state['data']:
     k1.metric("عدد الشركات", len(df_all))
     k2.metric("فرص القناص", len(st.session_state['signals']))
     
-    # هنا كان الخطأ سابقاً وتم إصلاحه باستخدام العمود الصحيح 'Change'
+    # هنا تم إصلاح الـ KeyError باستخدام العمود الصحيح 'Change'
     bullish_count = len(df_all[df_all['Change'] > 0])
     k3.metric("شركات خضراء 🟢", bullish_count)
     
@@ -185,15 +221,17 @@ if 'data' in st.session_state and st.session_state['data']:
             st.info("لا توجد إشارات حالياً.")
             
     with t2:
-        # عرض الجدول مع تحويل الأسماء للعربي للعرض فقط
+        # تجهيز الجدول للعرض (تعريب الأسماء هنا فقط وليس في المنطق)
         display_df = df_all.copy()
         display_df = display_df.rename(columns={
             "Name": "الاسم", "Price": "السعر", "Change": "التغير %", 
             "RSI": f"RSI ({RSI_PERIOD})", "MACD": "MACD"
         })
-        # اختيار الأعمدة للعرض
+        
+        # اختيار الأعمدة
         cols_to_show = ["الاسم", "السعر", "التغير %", f"RSI ({RSI_PERIOD})", "MACD"]
         
+        # التنسيق الشرطي (بدون تعقيدات Jinja2 المفرطة)
         st.dataframe(
             display_df[cols_to_show].style.format({"السعر": "{:.2f}", "التغير %": "{:.2f}%", f"RSI ({RSI_PERIOD})": "{:.2f}"})
             .background_gradient(cmap='RdYlGn', subset=['التغير %']),
@@ -214,3 +252,6 @@ if 'data' in st.session_state and st.session_state['data']:
             
             fig.update_layout(template="plotly_dark", height=600, xaxis_rangeslider_visible=False, paper_bgcolor='#161b24', plot_bgcolor='#161b24')
             st.plotly_chart(fig, use_container_width=True)
+else:
+    st.info("اضغط زر التحديث للبدء.")
+
