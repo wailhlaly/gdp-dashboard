@@ -7,29 +7,24 @@ import plotly.express as px
 from plotly.subplots import make_subplots
 import time
 
-# --- استيراد القائمة من مجلد data ---
+# --- استيراد القائمة من الملف الخارجي ---
 try:
-    # الصيغة الصحيحة لاستدعاء ملف داخل مجلد: from folder_name.file_name import variable
+    # محاولة الاستيراد من المجلد (الأفضل)
     from data.saudi_tickers import STOCKS_DB
 except ImportError:
-    # محاولة احتياطية: ربما الملف ما زال في الخارج؟
     try:
+        # محاولة الاستيراد المباشر (إذا الملف بجانب التطبيق)
         from saudi_tickers import STOCKS_DB
     except ImportError:
-        st.error("🚨 خطأ فادح: لم يتم العثور على ملف 'saudi_tickers.py'.\n\nتأكد أن الملف موجود داخل مجلد اسمه 'data' بجانب ملف التطبيق.")
+        st.error("🚨 خطأ: لم يتم العثور على ملف saudi_tickers.py")
         st.stop()
 
-# تحويل القائمة لقواميس ليسهل التعامل معها
+# تحويل القائمة لقواميس
 TICKERS = {item['symbol']: item['name'] for item in STOCKS_DB}
 SECTORS = {item['name']: item['sector'] for item in STOCKS_DB}
 
-# --- 1. إعداد الصفحة والوضع الليلي ---
-
-
-# ... (باقي الكود كما هو تماماً بدون تغيير) ...
-
-# --- 1. إعداد الصفحة والوضع الليلي ---
-st.set_page_config(page_title="Saudi Pro V4.1", layout="wide", initial_sidebar_state="collapsed")
+# --- 1. إعداد الصفحة ---
+st.set_page_config(page_title="Saudi Pro Interactive", layout="wide", initial_sidebar_state="collapsed")
 
 st.markdown("""
 <style>
@@ -48,12 +43,11 @@ st.markdown("""
 
 # --- 2. الإعدادات ---
 with st.sidebar:
-    st.header("⚙️ مركز التحكم")
+    st.header("⚙️ التحكم")
     RSI_PERIOD = st.number_input("RSI Period", value=24)
     EMA_PERIOD = st.number_input("EMA Period", value=8)
     st.divider()
-    st.subheader("📦 الصناديق")
-    ATR_MULT = st.number_input("ATR Multiplier", value=1.5)
+    ATR_MULT = st.number_input("ATR Mult", value=1.5)
     BOX_LOOKBACK = st.slider("Box History", 10, 50, 20)
 
 # --- 3. الدوال الفنية ---
@@ -68,13 +62,11 @@ def check_bullish_box(df, atr_series):
     in_series = False; is_bullish = False; start_open = 0.0; end_close = 0.0; found_boxes = []
     prices = df.iloc[-100:].reset_index() if len(df) > 100 else df.reset_index()
     atrs = atr_series.iloc[-100:].values if len(df) > 100 else atr_series.values
-    
     for i in range(len(prices)):
         row = prices.iloc[i]; close = row['Close']; open_p = row['Open']
         is_green = close > open_p; is_red = close < open_p
         current_atr = atrs[i]
         if np.isnan(current_atr): continue
-        
         if not in_series:
             if is_green: in_series = True; is_bullish = True; start_open = open_p
             elif is_red: in_series = True; is_bullish = False; start_open = open_p
@@ -122,16 +114,14 @@ def process_data(df):
         (df['Close'] > df['EMA86']).astype(int)
     )
     df['Trend_Score'] = score
-    
     return df
 
-# --- 5. الواجهة الرئيسية ---
-st.title("💎 Saudi Market Pro (V4.1)")
+# --- 5. التشغيل ---
+st.title("💎 Saudi Market Pro (Live Map)")
 
-if 'data' not in st.session_state: st.session_state['data'] = []
-if 'signals' not in st.session_state: st.session_state['signals'] = []
-if 'boxes' not in st.session_state: st.session_state['boxes'] = [] 
-if 'history' not in st.session_state: st.session_state['history'] = {}
+# تهيئة المتغيرات
+for key in ['data', 'signals', 'boxes', 'history']:
+    if key not in st.session_state: st.session_state[key] = []
 
 if st.button("🚀 تحديث وتحليل السوق"):
     st.session_state['data'] = []
@@ -139,7 +129,7 @@ if st.button("🚀 تحديث وتحليل السوق"):
     st.session_state['boxes'] = []
     st.session_state['history'] = {}
     
-    prog_bar = st.progress(0)
+    prog = st.progress(0)
     status = st.empty()
     tickers_list = list(TICKERS.keys())
     
@@ -201,36 +191,75 @@ if st.button("🚀 تحديث وتحليل السوق"):
                                         })
                     except: continue
         except: pass
-        prog_bar.progress(min((i + chunk_size) / len(tickers_list), 1.0))
+        prog.progress(min((i + chunk_size) / len(tickers_list), 1.0))
     
-    prog_bar.empty()
+    prog.empty()
     status.success("تم التحديث!")
 
-# --- 6. لوحة العرض ---
+# --- 6. العرض ---
 if st.session_state['data']:
     df = pd.DataFrame(st.session_state['data'])
     
-    st.markdown("##### 📊 نظرة سريعة")
+    # بطاقات سريعة
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric("🚀 الأكثر ارتفاعاً", f"{df.loc[df['Change'].idxmax()]['Name']}", f"{df['Change'].max():.2f}%")
-    c2.metric("🩸 الأكثر انخفاضاً", f"{df.loc[df['Change'].idxmin()]['Name']}", f"{df['Change'].min():.2f}%")
-    c3.metric("🔥 انفجار سيولة", f"{df.loc[df['RVOL'].idxmax()]['Name']}", f"x{df['RVOL'].max():.1f}")
-    c4.metric("📈 ترند صاعد قوي", len(df[df['Trend_Score'] == 4]))
+    c1.metric("الأكثر ارتفاعاً", f"{df.loc[df['Change'].idxmax()]['Name']}", f"{df['Change'].max():.2f}%")
+    c2.metric("الأكثر انخفاضاً", f"{df.loc[df['Change'].idxmin()]['Name']}", f"{df['Change'].min():.2f}%")
+    c3.metric("أعلى سيولة", f"{df.loc[df['RVOL'].idxmax()]['Name']}", f"x{df['RVOL'].max():.1f}")
+    c4.metric("ترند صاعد (4/4)", len(df[df['Trend_Score'] == 4]))
     
     st.divider()
     
     tabs = st.tabs(["🗺️ خريطة المتوسطات", "📦 الصناديق", "🎯 القناص", "📋 السوق الكامل", "📈 الشارت"])
     link_col = st.column_config.LinkColumn("شارت", display_text="Open TV")
 
+    # --- TAB 1: خريطة تفاعلية (Interactive Map) ---
     with tabs[0]:
-        st.subheader("خريطة قوة الترند (EMA 8-20-40-86)")
+        st.subheader("خريطة قوة الترند (اضغط على السهم للتفاصيل)")
+        
+        # إعداد البيانات للخريطة
+        # نقوم بتمرير المعلومات الإضافية (السعر، الرابط) عبر custom_data
         fig_ema = px.treemap(
-            df, path=[px.Constant("السوق السعودي"), 'Sector', 'Name'], values='Price',
-            color='Trend_Score', color_continuous_scale='RdYlGn', range_color=[0, 4],
-            hover_data=['Price', 'Change', 'Trend_Score']
+            df, 
+            path=[px.Constant("السوق السعودي"), 'Sector', 'Name'], 
+            values='Price',
+            color='Trend_Score', 
+            color_continuous_scale='RdYlGn', 
+            range_color=[0, 4],
+            custom_data=['Symbol', 'TV', 'Price', 'Name'] # بيانات إضافية مخفية للاستخدام عند النقر
+        )
+        
+        # تحسين شكل التلميح (Hover)
+        fig_ema.update_traces(
+            hovertemplate="<b>%{label}</b><br>السعر: %{customdata[2]:.2f}<br>التقييم: %{color:.0f}/4<extra></extra>"
         )
         fig_ema.update_layout(margin=dict(t=0, l=0, r=0, b=0), height=500)
-        st.plotly_chart(fig_ema, use_container_width=True)
+        
+        # عرض الخريطة مع تفعيل خاصية الاختيار (Selection)
+        # on_select="rerun" تعني: عند الضغط، أعد تشغيل الكود لتحديث البيانات المعروضة
+        selected_points = st.plotly_chart(fig_ema, use_container_width=True, on_select="rerun")
+        
+        # --- منطقة التفاعل (تظهر عند الضغط) ---
+        if selected_points and len(selected_points['selection']['points']) > 0:
+            # استخراج البيانات من النقطة التي تم ضغطها
+            point = selected_points['selection']['points'][0]
+            
+            # التأكد من أن المستخدم ضغط على سهم وليس قطاع
+            if 'customdata' in point:
+                selected_sym = point['customdata'][0]
+                selected_tv = point['customdata'][1]
+                selected_price = point['customdata'][2]
+                selected_name = point['customdata'][3]
+                
+                st.markdown("---")
+                st.markdown(f"### 🔎 تفاصيل: **{selected_name}**")
+                
+                col_info, col_link = st.columns([2, 1])
+                with col_info:
+                    st.metric("السعر الحالي", f"{selected_price:.2f}")
+                with col_link:
+                    st.link_button(f"فتح {selected_name} في TradingView 📈", selected_tv)
+            else:
+                st.warning("الرجاء الضغط على مربع شركة محددة لعرض التفاصيل.")
 
     with tabs[1]:
         if st.session_state['boxes']:
@@ -267,4 +296,4 @@ if st.session_state['data']:
             fig.update_layout(template="plotly_dark", height=600, xaxis_rangeslider_visible=False, paper_bgcolor='#161b24', plot_bgcolor='#161b24')
             st.plotly_chart(fig, use_container_width=True)
 else:
-    st.info("👋 V4.1 جاهز! اضغط زر التحديث.")
+    st.info("👋 اضغط زر التحديث للبدء.")
