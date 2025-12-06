@@ -3,11 +3,7 @@ import yfinance as yf
 import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
-import plotly.express as px
-from plotly.subplots import make_subplots
 from streamlit_option_menu import option_menu
-from scipy.signal import argrelextrema
-import time
 
 # --- استيراد البيانات ---
 try:
@@ -17,47 +13,39 @@ except ImportError:
     st.stop()
 
 TICKERS = {item['symbol']: item['name'] for item in STOCKS_DB}
-SECTORS = {item['name']: item['sector'] for item in STOCKS_DB}
 
-# --- 1. إعداد الصفحة والستايل ---
-st.set_page_config(page_title="TASI Pro V9", layout="wide", initial_sidebar_state="collapsed")
+# --- 1. إعداد الصفحة ---
+st.set_page_config(page_title="TASI Matrix Pro", layout="wide", initial_sidebar_state="collapsed")
 
 st.markdown("""
 <style>
     @import url('https://fonts.googleapis.com/css2?family=Cairo:wght@400;700&display=swap');
-    html, body, [class*="css"] { font-family: 'Cairo', sans-serif; }
-    .stApp { background-color: #0e1117; color: #e0e0e0; }
-    .stDataFrame { border: 1px solid #30333d; }
-    div[data-testid="stDataFrame"] div[class*="css"] { background-color: #161b24; color: white; }
-    div[data-testid="stMetric"] { background-color: #1d212b !important; border: 1px solid #464b5f !important; padding: 15px !important; border-radius: 10px !important; }
-    [data-testid="stMetricValue"] { color: #ffffff !important; }
-    div.stButton > button { background: linear-gradient(90deg, #ff6d00, #ff3d00); color: white; border: none; padding: 12px 20px; border-radius: 8px; font-weight: bold; width: 100%; }
-    .stTabs [data-baseweb="tab-list"] { gap: 8px; }
-    .stTabs [data-baseweb="tab"] { background-color: #1d212b; color: #e0e0e0; border-radius: 4px; }
-    .stTabs [aria-selected="true"] { background-color: #ff6d00 !important; color: white !important; }
+    html, body, [class*="css"] { font-family: 'Cairo', sans-serif; direction: rtl; }
+    
+    .stApp { background-color: #0e1117; color: #ffffff; }
+    .stDataFrame { border: 1px solid #30333d; border-radius: 8px; }
+    
+    /* تنسيق الخلايا الملونة */
+    .bullish { background-color: #004d40; color: #b2dfdb; padding: 5px; border-radius: 4px; text-align: center; font-weight: bold; }
+    .bearish { background-color: #3e2723; color: #ffccbc; padding: 5px; border-radius: 4px; text-align: center; font-weight: bold; }
+    .neutral { color: #555; text-align: center; }
+    
+    /* زر التشغيل */
+    div.stButton > button {
+        background: linear-gradient(90deg, #2962ff, #0039cb); color: white; 
+        border: none; padding: 10px 24px; border-radius: 8px; font-weight: bold; width: 100%;
+    }
 </style>
 """, unsafe_allow_html=True)
 
-# --- 2. القائمة العلوية ---
-selected_tab = option_menu(
-    menu_title=None,
-    options=["القائمة الشاملة (Master List)", "التحليل الفني", "الخريطة", "الشارت"],
-    icons=["list-task", "cpu", "grid", "graph-up"],
-    default_index=0,
-    orientation="horizontal",
-    styles={"container": {"background-color": "transparent"}, "nav-link-selected": {"background-color": "#ff6d00"}}
-)
-
-# --- 3. الإعدادات ---
+# --- 2. الإعدادات ---
 with st.sidebar:
-    st.header("⚙️ إعدادات التحليل")
-    RSI_PERIOD = st.number_input("RSI Period", 14, 30, 24)
-    EMA_PERIOD = st.number_input("EMA Trend", 10, 200, 20)
-    st.divider()
+    st.header("⚙️ الإعدادات")
     ATR_MULT = st.number_input("ATR Multiplier", 1.0, 3.0, 1.5)
-    BOX_LOOKBACK = st.slider("Box History", 10, 100, 25)
+    BOX_LOOKBACK = st.slider("نطاق البحث (شموع)", 5, 50, 20)
 
-# --- 4. الدوال الفنية ---
+# --- 3. الدوال الفنية (Core Logic) ---
+
 def calculate_atr(df, period=14):
     high_low = df['High'] - df['Low']
     high_close = np.abs(df['High'] - df['Close'].shift())
@@ -65,229 +53,160 @@ def calculate_atr(df, period=14):
     ranges = pd.concat([high_low, high_close, low_close], axis=1)
     return ranges.max(axis=1).ewm(alpha=1/period, min_periods=period, adjust=False).mean()
 
-def process_data(df):
-    df['Change'] = df['Close'].pct_change() * 100
+# دالة ذكية تفحص وجود صندوق (صاعد أو هابط) وترجع الحالة
+def get_box_status(df, lookback):
+    if len(df) < 50: return "---"
+    
+    # حساب ATR
     df['ATR'] = calculate_atr(df)
-    df['Vol_Avg'] = df['Volume'].rolling(window=20).mean()
-    df['RVOL'] = df['Volume'] / df['Vol_Avg']
     
-    delta = df['Close'].diff()
-    gain = delta.clip(lower=0); loss = -delta.clip(upper=0)
-    avg_gain = gain.ewm(alpha=1/24, min_periods=24, adjust=False).mean()
-    avg_loss = loss.ewm(alpha=1/24, min_periods=24, adjust=False).mean()
-    rs = avg_gain / avg_loss
-    df['RSI'] = 100 - (100 / (1 + rs))
+    prices = df.iloc[-lookback:].reset_index()
+    atrs = df['ATR'].iloc[-lookback:].values
     
-    df['EMA'] = df['Close'].ewm(span=EMA_PERIOD, adjust=False).mean()
-    df['EMA50'] = df['Close'].ewm(span=50, adjust=False).mean()
-    df['Trend_Score'] = ((df['Close'] > df['EMA']).astype(int) + (df['Close'] > df['EMA50']).astype(int))
-    return df
-
-# 🔥 كاشف الصناديق الصعودية (Bullish)
-def check_bullish_box(df, atr_series):
-    in_series = False; is_bullish = False; start_open = 0.0; end_close = 0.0; start_idx = 0; found_boxes = []
-    prices = df.iloc[-150:].reset_index(); atrs = atr_series.iloc[-150:].values
+    latest_status = "---" # الحالة الافتراضية
+    
+    # خوارزمية الصندوق
+    in_series = False; mode = None # 'bull' or 'bear'
+    start_open = 0.0; end_close = 0.0
     
     for i in range(len(prices)):
         row = prices.iloc[i]; close = row['Close']; open_p = row['Open']
         is_green = close > open_p; is_red = close < open_p
         current_atr = atrs[i]
+        
         if np.isnan(current_atr): continue
         
         if not in_series:
-            if is_green: in_series = True; is_bullish = True; start_open = open_p; start_idx = i
-            elif is_red: in_series = True; is_bullish = False; start_open = open_p; start_idx = i
+            if is_green: in_series = True; mode = 'bull'; start_open = open_p
+            elif is_red: in_series = True; mode = 'bear'; start_open = open_p
         elif in_series:
-            if is_bullish and is_green: end_close = close
-            elif not is_bullish and is_red: end_close = close
-            elif (is_bullish and is_red) or (not is_bullish and is_green):
+            if mode == 'bull' and is_green: end_close = close
+            elif mode == 'bear' and is_red: end_close = close
+            elif (mode == 'bull' and is_red) or (mode == 'bear' and is_green):
+                # نهاية السلسلة
                 final_close = end_close if end_close != 0 else start_open
                 price_move = abs(final_close - start_open)
-                if price_move >= current_atr * ATR_MULT and is_bullish:
-                    periods_ago = len(prices) - i
-                    if periods_ago <= BOX_LOOKBACK:
-                        found_boxes.append({
-                            "Type": "Bullish",
-                            "Box_Top": max(start_open, final_close), "Box_Bottom": min(start_open, final_close),
-                            "Days_Ago": periods_ago, "Start_Index": len(df) - periods_ago - (i - start_idx), "End_Index": len(df) - periods_ago
-                        })
-                in_series = True; is_bullish = is_green; start_open = open_p; end_close = close; start_idx = i
-    return found_boxes
-
-# ❄️ كاشف الصناديق الهبوطية (Bearish) - الجديد
-def check_bearish_box(df, atr_series):
-    in_series = False; is_bearish_series = False; start_open = 0.0; end_close = 0.0; start_idx = 0; found_boxes = []
-    prices = df.iloc[-150:].reset_index(); atrs = atr_series.iloc[-150:].values
-    
-    for i in range(len(prices)):
-        row = prices.iloc[i]; close = row['Close']; open_p = row['Open']
-        is_red = close < open_p; is_green = close > open_p
-        current_atr = atrs[i]
-        if np.isnan(current_atr): continue
-        
-        if not in_series:
-            if is_red: in_series = True; is_bearish_series = True; start_open = open_p; start_idx = i
-            elif is_green: in_series = True; is_bearish_series = False; start_open = open_p; start_idx = i
-        elif in_series:
-            if is_bearish_series and is_red: end_close = close
-            elif not is_bearish_series and is_green: end_close = close
-            elif (is_bearish_series and is_green) or (not is_bearish_series and is_red):
-                final_close = end_close if end_close != 0 else start_open
-                price_move = abs(final_close - start_open)
-                # شرط الهبوط: سلسلة حمراء قوية
-                if price_move >= current_atr * ATR_MULT and is_bearish_series:
-                    periods_ago = len(prices) - i
-                    if periods_ago <= BOX_LOOKBACK:
-                        found_boxes.append({
-                            "Type": "Bearish",
-                            "Box_Top": max(start_open, final_close), "Box_Bottom": min(start_open, final_close),
-                            "Days_Ago": periods_ago, "Start_Index": len(df) - periods_ago - (i - start_idx), "End_Index": len(df) - periods_ago
-                        })
-                in_series = True; is_bearish_series = is_red; start_open = open_p; end_close = close; start_idx = i
-    return found_boxes
-
-# --- 5. المنطق (Engine) ---
-if 'boxes_list' not in st.session_state: st.session_state['boxes_list'] = []
-if 'history' not in st.session_state: st.session_state['history'] = {}
-
-c1, c2 = st.columns([1, 4])
-with c2:
-    if st.button("🚀 تحديث القائمة الشاملة (يومي/أسبوعي/شهري)"):
-        st.session_state['boxes_list'] = []
-        st.session_state['history'] = {}
-        progress = st.progress(0); status = st.empty()
-        tickers = list(TICKERS.keys())
-        
-        # إعداد الفريمات
-        TIMEFRAMES = {
-            'Daily': {'p': '1y', 'i': '1d', 'lbl': 'يومي 📅'},
-            'Weekly': {'p': '2y', 'i': '1wk', 'lbl': 'أسبوعي 🗓️'},
-            'Monthly': {'p': '5y', 'i': '1mo', 'lbl': 'شهري 📆'}
-        }
-        
-        total_steps = len(tickers) * 3
-        curr_step = 0
-        
-        chunk_size = 20
-        for i in range(0, len(tickers), chunk_size):
-            chunk = tickers[i:i + chunk_size]
-            
-            for tf_name, tf_cfg in TIMEFRAMES.items():
-                status.markdown(f"**جاري فحص {tf_cfg['lbl']}... ({i}/{len(tickers)})**")
-                try:
-                    raw = yf.download(chunk, period=tf_cfg['p'], interval=tf_cfg['i'], group_by='ticker', auto_adjust=False, threads=True, progress=False)
-                    if not raw.empty:
-                        for sym in chunk:
-                            try:
-                                name = TICKERS[sym]
-                                try: df = raw[sym].copy()
-                                except: continue
-                                
-                                col = 'Close' if 'Close' in df.columns else 'Adj Close'
-                                if col in df.columns:
-                                    df = df.rename(columns={col: 'Close'})
-                                    df = df.dropna()
-                                    if len(df) > 20:
-                                        df = process_data(df)
-                                        last = df.iloc[-1]
-                                        
-                                        if tf_name == 'Daily': # نحفظ اليومي فقط للشارت
-                                            link = f"https://www.tradingview.com/chart/?symbol=TADAWUL:{sym.replace('.SR','')}"
-                                            st.session_state['history'][name] = df
-                                        
-                                        # فحص الصناديق (بنوعيها)
-                                        bull_boxes = check_bullish_box(df, df['ATR'])
-                                        bear_boxes = check_bearish_box(df, df['ATR'])
-                                        
-                                        # دمج النتائج
-                                        all_boxes = bull_boxes + bear_boxes
-                                        
-                                        if all_boxes:
-                                            # نأخذ أحدث صندوق من كل نوع إذا وجد
-                                            latest_box = all_boxes[-1] 
-                                            
-                                            st.session_state['boxes_list'].append({
-                                                "Name": name,
-                                                "Timeframe": tf_cfg['lbl'],
-                                                "Type": latest_box['Type'],
-                                                "Price": last['Close'],
-                                                "Box_Top": latest_box['Box_Top'],
-                                                "Box_Bottom": latest_box['Box_Bottom'],
-                                                "Age": latest_box['Days_Ago'],
-                                                "TV": f"https://www.tradingview.com/chart/?symbol=TADAWUL:{sym.replace('.SR','')}",
-                                                "Raw_TF": tf_name, # للفلترة
-                                                "Start_Idx": latest_box['Start_Index'], "End_Idx": latest_box['End_Index'] # للرسم
-                                            })
-                            except: continue
-                except: pass
-                curr_step += len(chunk)
-                progress.progress(min(curr_step / total_steps, 1.0))
-        
-        progress.empty(); status.success("تم بناء القائمة الشاملة!")
-
-# --- 6. العرض ---
-if st.session_state['boxes_list']:
-    df = pd.DataFrame(st.session_state['boxes_list'])
-    link_col = st.column_config.LinkColumn("شارت", display_text="TV")
-
-    if selected_tab == "القائمة الشاملة (Master List)":
-        # الفلاتر العلوية
-        c1, c2, c3 = st.columns(3)
-        with c1: filter_type = st.multiselect("نوع الصندوق", ["Bullish", "Bearish"], default=["Bullish", "Bearish"])
-        with c2: filter_tf = st.multiselect("الفريم الزمني", ["يومي 📅", "أسبوعي 🗓️", "شهري 📆"], default=["يومي 📅", "أسبوعي 🗓️"])
-        with c3: sort_by = st.selectbox("ترتيب حسب", ["الأحدث (Age)", "السعر"])
-        
-        # تطبيق الفلتر
-        view_df = df.copy()
-        if filter_type: view_df = view_df[view_df['Type'].isin(filter_type)]
-        if filter_tf: view_df = view_df[view_df['Timeframe'].isin(filter_tf)]
-        
-        if sort_by == "الأحدث (Age)": view_df = view_df.sort_values('Age', ascending=True)
-        else: view_df = view_df.sort_values('Price', ascending=False)
-        
-        # التلوين
-        def color_row(row):
-            box_col = '#00c853' if row['Type'] == 'Bullish' else '#ff5252' # أخضر للصاعد، أحمر للهابط
-            return [f'color: {box_col}; font-weight: bold' if col == 'Type' else '' for col in row.index]
-
-        st.dataframe(
-            view_df[['Name', 'Timeframe', 'Type', 'Price', 'Box_Top', 'Box_Bottom', 'Age', 'TV']].style
-            .format({"Price": "{:.2f}", "Box_Top": "{:.2f}", "Box_Bottom": "{:.2f}"})
-            .apply(color_row, axis=1),
-            column_config={"TV": link_col}, use_container_width=True, height=600
-        )
-
-    elif selected_tab == "الشارت":
-        c_sel, _ = st.columns([1, 3])
-        with c_sel: sel_stock = st.selectbox("اختر السهم:", df['Name'].unique())
-        
-        if sel_stock:
-            if sel_stock in st.session_state['history']:
-                hist = st.session_state['history'][sel_stock]
                 
-                fig = make_subplots(rows=2, cols=1, shared_xaxes=True, row_heights=[0.8, 0.2], vertical_spacing=0.02)
-                fig.add_trace(go.Candlestick(x=hist.index, open=hist['Open'], high=hist['High'], low=hist['Low'], close=hist['Close'], name='Price'), row=1, col=1)
-                
-                # رسم الصناديق الخاصة بالسهم (كل الأنواع والفريمات)
-                stock_boxes = df[df['Name'] == sel_stock]
-                for _, box in stock_boxes.iterrows():
-                    # نلون حسب النوع والفريم
-                    if box['Type'] == 'Bullish':
-                        color = "rgba(0, 200, 83, 0.4)" if box['Raw_TF'] == 'Daily' else "rgba(0, 200, 83, 0.2)"
-                        border = "#00c853"
-                    else:
-                        color = "rgba(255, 82, 82, 0.4)" if box['Raw_TF'] == 'Daily' else "rgba(255, 82, 82, 0.2)"
-                        border = "#ff5252"
+                # التحقق من الشرط
+                if price_move >= current_atr * ATR_MULT:
+                    # تم اكتشاف صندوق! هل السعر الحالي ما زال يحترمه؟
+                    current_price = prices.iloc[-1]['Close']
+                    box_top = max(start_open, final_close)
+                    box_bottom = min(start_open, final_close)
                     
-                    # ملاحظة: الرسم هنا تقريبي للفريمات الأكبر لأنه يعتمد على إحداثيات اليومي
-                    # لكنه يعطي دلالة بصرية جيدة
-                    if box['Raw_TF'] == 'Daily': # نرسم اليومي بدقة
-                        fig.add_shape(type="rect", x0=hist.index[-box['Age']], x1=hist.index[-1], y0=box['Box_Bottom'], y1=box['Box_Top'], line=dict(color=border, width=1), fillcolor=color, row=1, col=1)
+                    if mode == 'bull':
+                        # الصندوق الصاعد: يعتبر فعالاً إذا السعر فوق قاعه
+                        if current_price >= box_bottom: 
+                            latest_status = "🟢 صاعد"
+                    else:
+                        # الصندوق الهابط: يعتبر فعالاً إذا السعر تحت قمته
+                        if current_price <= box_top:
+                            latest_status = "🔴 هابط"
+                            
+                # إعادة تعيين
+                in_series = True
+                mode = 'bull' if is_green else 'bear'
+                start_open = open_p; end_close = close
+                
+    return latest_status
 
-                fig.update_layout(template="plotly_dark", height=600, xaxis_rangeslider_visible=False, paper_bgcolor='#131722', plot_bgcolor='#131722')
-                st.plotly_chart(fig, use_container_width=True)
-            else:
-                st.warning("بيانات الشارت غير متوفرة لهذا السهم (قد يكون صندوق أسبوعي/شهري فقط).")
+# --- 4. المحرك الرئيسي ---
+st.title("📊 مصفوفة الصناديق الشاملة (Matrix View)")
 
+if 'matrix_data' not in st.session_state: st.session_state['matrix_data'] = []
+
+if st.button("🚀 تحديث المصفوفة (Scan All Timeframes)"):
+    st.session_state['matrix_data'] = []
+    progress = st.progress(0); status = st.empty()
+    tickers = list(TICKERS.keys())
+    
+    # نسحب بيانات يومية لمدة سنتين (تكفي لاشتقاق الأسبوعي والشهري)
+    chunk_size = 30
+    for i in range(0, len(tickers), chunk_size):
+        chunk = tickers[i:i + chunk_size]
+        status.text(f"معالجة الدفعة {i//chunk_size + 1}...")
+        
+        try:
+            # سحب البيانات اليومية الخام
+            raw_daily = yf.download(chunk, period="2y", interval="1d", group_by='ticker', auto_adjust=False, threads=True, progress=False)
+            
+            if not raw_daily.empty:
+                for sym in chunk:
+                    try:
+                        name = TICKERS[sym]
+                        try: df_d = raw_daily[sym].copy()
+                        except: continue
+                        
+                        # تنظيف
+                        col = 'Close' if 'Close' in df_d.columns else 'Adj Close'
+                        if col in df_d.columns:
+                            df_d = df_d.rename(columns={col: 'Close'})
+                            df_d = df_d.dropna()
+                            if len(df_d) > 50:
+                                last_price = df_d['Close'].iloc[-1]
+                                
+                                # 1. تحليل اليومي (Daily)
+                                status_d = get_box_status(df_d, BOX_LOOKBACK)
+                                
+                                # 2. اشتقاق وتحليل الأسبوعي (Weekly Resample)
+                                df_w = df_d.resample('W').agg({'Open':'first', 'High':'max', 'Low':'min', 'Close':'last', 'Volume':'sum'}).dropna()
+                                status_w = get_box_status(df_w, BOX_LOOKBACK)
+                                
+                                # 3. اشتقاق وتحليل الشهري (Monthly Resample)
+                                df_m = df_d.resample('ME').agg({'Open':'first', 'High':'max', 'Low':'min', 'Close':'last', 'Volume':'sum'}).dropna()
+                                status_m = get_box_status(df_m, BOX_LOOKBACK) # ننظر لعدد أقل من الشهور عادة
+                                
+                                # لا نعرض السهم إلا إذا كان فيه صندوق واحد على الأقل
+                                if "---" not in [status_d, status_w, status_m] or status_d != "---" or status_w != "---" or status_m != "---":
+                                    link = f"https://www.tradingview.com/chart/?symbol=TADAWUL:{sym.replace('.SR','')}"
+                                    
+                                    st.session_state['matrix_data'].append({
+                                        "الاسم": name,
+                                        "السعر": last_price,
+                                        "يومي": status_d,
+                                        "أسبوعي": status_w,
+                                        "شهري": status_m,
+                                        "TV_Url": link
+                                    })
+                    except: continue
+        except: pass
+        progress.progress(min((i + chunk_size) / len(tickers), 1.0))
+        
+    progress.empty(); status.success("تم بناء المصفوفة!")
+
+# --- 5. العرض (الجدول الموحد) ---
+if st.session_state['matrix_data']:
+    df = pd.DataFrame(st.session_state['matrix_data'])
+    
+    # إحصائيات سريعة
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("عدد الفرص", len(df))
+    # حساب الشركات التي لديها توافق (يومي + أسبوعي صاعد)
+    confluence = df[(df['يومي'] == "🟢 صاعد") & (df['أسبوعي'] == "🟢 صاعد")]
+    c2.metric("توافق صاعد (D+W)", len(confluence))
+    
+    st.markdown("### 📋 التحليل الشامل (Matrix)")
+    
+    # دالة لتلوين الخلايا
+    def style_matrix(val):
+        if val == "🟢 صاعد":
+            return 'background-color: #004d40; color: #e0f2f1; font-weight: bold; text-align: center;'
+        elif val == "🔴 هابط":
+            return 'background-color: #3e2723; color: #fbe9e7; font-weight: bold; text-align: center;'
+        else:
+            return 'color: #555; text-align: center;'
+
+    # إعداد رابط الشارت
+    link_config = st.column_config.LinkColumn("الشارت", display_text="Open TV")
+
+    # عرض الجدول
+    st.dataframe(
+        df.style
+        .format({"السعر": "{:.2f}"})
+        .map(style_matrix, subset=['يومي', 'أسبوعي', 'شهري']), # تلوين الأعمدة الثلاثة
+        column_config={"TV_Url": link_config},
+        use_container_width=True,
+        height=700
+    )
 else:
-    st.info("👋 اضغط الزر البرتقالي لبناء القائمة الشاملة.")
+    st.info("اضغط الزر للبدء. سيتم فحص 260+ شركة على 3 فريمات.")
