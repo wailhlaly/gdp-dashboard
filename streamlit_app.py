@@ -7,19 +7,29 @@ import plotly.express as px
 from plotly.subplots import make_subplots
 import time
 
-# --- استيراد القائمة من الملف الخارجي ---
+# --- استيراد القائمة من مجلد data ---
 try:
-    from data/saudi_tickers import STOCKS_DB
+    # الصيغة الصحيحة لاستدعاء ملف داخل مجلد: from folder_name.file_name import variable
+    from data.saudi_tickers import STOCKS_DB
 except ImportError:
-    st.error("عفواً، لم يتم العثور على ملف saudi_tickers.py. تأكد من وجوده في نفس المجلد.")
-    st.stop()
+    # محاولة احتياطية: ربما الملف ما زال في الخارج؟
+    try:
+        from saudi_tickers import STOCKS_DB
+    except ImportError:
+        st.error("🚨 خطأ فادح: لم يتم العثور على ملف 'saudi_tickers.py'.\n\nتأكد أن الملف موجود داخل مجلد اسمه 'data' بجانب ملف التطبيق.")
+        st.stop()
 
 # تحويل القائمة لقواميس ليسهل التعامل معها
 TICKERS = {item['symbol']: item['name'] for item in STOCKS_DB}
 SECTORS = {item['name']: item['sector'] for item in STOCKS_DB}
 
 # --- 1. إعداد الصفحة والوضع الليلي ---
-st.set_page_config(page_title="Saudi Pro V4", layout="wide", initial_sidebar_state="collapsed")
+
+
+# ... (باقي الكود كما هو تماماً بدون تغيير) ...
+
+# --- 1. إعداد الصفحة والوضع الليلي ---
+st.set_page_config(page_title="Saudi Pro V4.1", layout="wide", initial_sidebar_state="collapsed")
 
 st.markdown("""
 <style>
