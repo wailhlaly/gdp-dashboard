@@ -3,6 +3,7 @@ import yfinance as yf
 import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
+import random
 import math
 
 # --- استيراد البيانات ---
@@ -16,27 +17,28 @@ TICKERS = {item['symbol']: item['name'] for item in STOCKS_DB}
 SECTORS_MAP = {item['name']: item['sector'] for item in STOCKS_DB}
 
 # --- 1. إعداد الصفحة ---
-st.set_page_config(page_title="TASI Solar System", layout="wide", initial_sidebar_state="collapsed")
+st.set_page_config(page_title="TASI Galaxy Pro", layout="wide", initial_sidebar_state="collapsed")
 
 st.markdown("""
 <style>
     @import url('https://fonts.googleapis.com/css2?family=Cairo:wght@400;700&display=swap');
     html, body, [class*="css"] { font-family: 'Cairo', sans-serif; }
     
+    /* خلفية الفضاء العميق */
     .stApp { background-color: #000000; color: #ffffff; }
     
-    /* جعل الزر يبدو كأنه زر تشغيل مركبة فضائية */
+    /* زر الإطلاق */
     div.stButton > button {
-        background: linear-gradient(180deg, #ff9800, #e65100);
-        color: white; border: 1px solid #ffb74d;
-        padding: 12px 24px; border-radius: 50px;
-        font-weight: bold; font-size: 18px; width: 100%;
-        box-shadow: 0 0 20px rgba(255, 152, 0, 0.6);
-        transition: all 0.3s;
+        background: radial-gradient(circle, #2962ff 0%, #000000 100%);
+        color: white; border: 1px solid #2962ff;
+        padding: 15px 30px; border-radius: 50px;
+        font-weight: bold; font-size: 20px; width: 100%;
+        box-shadow: 0 0 25px rgba(41, 98, 255, 0.5);
+        transition: transform 0.2s;
     }
     div.stButton > button:hover {
         transform: scale(1.05);
-        box-shadow: 0 0 40px rgba(255, 152, 0, 0.9);
+        box-shadow: 0 0 45px rgba(41, 98, 255, 0.8);
     }
 </style>
 """, unsafe_allow_html=True)
@@ -45,9 +47,9 @@ st.markdown("""
 with st.sidebar:
     st.header("⚙️ إعدادات الرادار")
     ATR_MULT = st.number_input("ATR Multiplier", 1.0, 3.0, 1.5)
-    BOX_LOOKBACK = st.slider("نطاق البحث (شموع)", 5, 50, 20)
+    BOX_LOOKBACK = st.slider("نطاق البحث", 5, 50, 20)
 
-# --- 3. الدوال الفنية (Core Logic) ---
+# --- 3. الدوال الفنية ---
 def calculate_atr(df, period=14):
     high_low = df['High'] - df['Low']
     high_close = np.abs(df['High'] - df['Close'].shift())
@@ -59,7 +61,7 @@ def get_box_status(df, lookback):
     if len(df) < 30: return "---"
     df['ATR'] = calculate_atr(df)
     prices = df.iloc[-lookback:].reset_index(); atrs = df['ATR'].iloc[-lookback:].values
-    latest_status = "---" # رمادي (محايد)
+    latest_status = "---"
     
     in_series = False; mode = None; start_open = 0.0; end_close = 0.0
     
@@ -81,25 +83,24 @@ def get_box_status(df, lookback):
                 if price_move >= current_atr * ATR_MULT:
                     current_price = prices.iloc[-1]['Close']
                     box_top = max(start_open, final_close); box_bottom = min(start_open, final_close)
-                    
                     if mode == 'bull':
-                        if current_price >= box_bottom: latest_status = "Bull" # صاعد
+                        if current_price >= box_bottom: latest_status = "Bull"
                     else:
-                        if current_price <= box_top: latest_status = "Bear" # هابط
+                        if current_price <= box_top: latest_status = "Bear"
                 in_series = True; mode = 'bull' if is_green else 'bear'; start_open = open_p; end_close = close
     return latest_status
 
 def get_color(status):
-    if status == "Bull": return "#00e676" # أخضر نيون
-    elif status == "Bear": return "#ff1744" # أحمر نيون
-    else: return "#424242" # رمادي غامق
+    if status == "Bull": return "#00e676" # أخضر مشع
+    elif status == "Bear": return "#ff1744" # أحمر مشع
+    else: return "#263238" # رمادي غامق جداً (مطفى)
 
 # --- 4. المحرك الرئيسي ---
-st.title("🌌 النظام الشمسي للسوق السعودي (TASI Galaxy)")
+st.title("🌌 TASI Galaxy (Live Space View)")
 
 if 'galaxy_data' not in st.session_state: st.session_state['galaxy_data'] = []
 
-if st.button("🪐 إطلاق المسح الكوني (Scan Universe)"):
+if st.button("🪐 إطلاق المسبار الفضائي (Scan)"):
     st.session_state['galaxy_data'] = []
     progress = st.progress(0); status = st.empty()
     tickers = list(TICKERS.keys())
@@ -107,7 +108,7 @@ if st.button("🪐 إطلاق المسح الكوني (Scan Universe)"):
     chunk_size = 30
     for i in range(0, len(tickers), chunk_size):
         chunk = tickers[i:i + chunk_size]
-        status.text(f"جاري مسح القطاع {i//chunk_size + 1}...")
+        status.text(f"جاري مسح النظام الشمسي... {i//chunk_size + 1}")
         try:
             raw_daily = yf.download(chunk, period="2y", interval="1d", group_by='ticker', auto_adjust=False, threads=True, progress=False)
             if not raw_daily.empty:
@@ -121,7 +122,6 @@ if st.button("🪐 إطلاق المسح الكوني (Scan Universe)"):
                         if col in df_d.columns:
                             df_d = df_d.rename(columns={col: 'Close'}); df_d = df_d.dropna()
                             if len(df_d) > 50:
-                                # تحليل الفريمات
                                 s_d = get_box_status(df_d, BOX_LOOKBACK)
                                 df_w = df_d.resample('W').agg({'Open':'first', 'High':'max', 'Low':'min', 'Close':'last', 'Volume':'sum'}).dropna()
                                 s_w = get_box_status(df_w, BOX_LOOKBACK)
@@ -136,107 +136,117 @@ if st.button("🪐 إطلاق المسح الكوني (Scan Universe)"):
                     except: continue
         except: pass
         progress.progress(min((i + chunk_size) / len(tickers), 1.0))
-    progress.empty(); status.success("اكتمل بناء المجرة!")
+    progress.empty(); status.success("تم بناء المجرة!")
 
-# --- 5. رسم المجرة (Solar System Visualization) ---
+# --- 5. رسم المجرة (Advanced Solar System) ---
 if st.session_state['galaxy_data']:
     df = pd.DataFrame(st.session_state['galaxy_data'])
     
-    # --- الخوارزمية الهندسية لتوزيع الكواكب ---
     fig = go.Figure()
     
+    # 0. خلفية النجوم (Starfield) لإعطاء عمق
+    # ننشئ 200 نقطة عشوائية بيضاء في الخلفية
+    star_x = [random.uniform(-150, 150) for _ in range(300)]
+    star_y = [random.uniform(-150, 150) for _ in range(300)]
+    fig.add_trace(go.Scatter(
+        x=star_x, y=star_y, mode='markers',
+        marker=dict(size=2, color='white', opacity=0.3),
+        hoverinfo='none'
+    ))
+
     # 1. الشمس (TASI)
     fig.add_trace(go.Scatter(
         x=[0], y=[0], mode='markers+text',
-        marker=dict(size=60, color='#ffcc00', line=dict(color='#ff9800', width=4)),
-        text=["<b>TASI</b>"], textposition="middle center", hoverinfo='none',
-        textfont=dict(color='black', size=14)
+        marker=dict(size=80, color='#ffab00', line=dict(color='#ffd600', width=6), opacity=0.9),
+        text=["<b>TASI</b>"], textposition="middle center",
+        textfont=dict(color='black', size=16, family="Cairo"),
+        hoverinfo='none'
     ))
     
-    # تجميع البيانات حسب القطاع
+    # توزيع القطاعات
     sectors = df['Sector'].unique()
-    sector_radius = 40 # بعد القطاعات عن الشمس
-    stock_radius = 8   # بعد الأسهم عن القطاع
+    # زيادة نصف القطر بشكل كبير لإعطاء مساحة
+    sector_radius = 65 
     
     for i, sec in enumerate(sectors):
-        # حساب موقع القطاع (دائرة كبيرة)
+        # زاوية القطاع
         sec_angle = (2 * math.pi * i) / len(sectors)
         sec_x = sector_radius * math.cos(sec_angle)
         sec_y = sector_radius * math.sin(sec_angle)
         
-        # رسم مدار القطاع (خط وهمي)
-        # fig.add_shape(type="circle", x0=-sector_radius, y0=-sector_radius, x1=sector_radius, y1=sector_radius, line_color="#333")
-        
         # رسم كوكب القطاع
         fig.add_trace(go.Scatter(
             x=[sec_x], y=[sec_y], mode='markers+text',
-            marker=dict(size=25, color='#2962ff', opacity=0.8),
+            marker=dict(size=35, color='#2962ff', line=dict(color='#82b1ff', width=2), opacity=0.9),
             text=[sec], textposition="bottom center",
-            textfont=dict(color='#90caf9', size=12),
+            textfont=dict(color='#e3f2fd', size=14, weight="bold"),
             hoverinfo='none'
         ))
         
-        # توزيع أسهم هذا القطاع حوله
+        # توزيع أسهم القطاع (سحابة حول الكوكب)
         sec_stocks = df[df['Sector'] == sec]
         num_stocks = len(sec_stocks)
         
         for j, (_, stock) in enumerate(sec_stocks.iterrows()):
-            # حساب موقع السهم حول القطاع
             stock_angle = (2 * math.pi * j) / num_stocks
-            # نزيد المسافة قليلاً إذا كانت الأسهم كثيرة لتجنب التزاحم
-            dynamic_radius = stock_radius + (num_stocks * 0.1) 
             
-            stk_x = sec_x + dynamic_radius * math.cos(stock_angle)
-            stk_y = sec_y + dynamic_radius * math.sin(stock_angle)
+            # --- التحسين الجوهري: تباعد عشوائي ---
+            # بدلاً من نصف قطر ثابت، نجعله يتراوح بين قيمة دنيا وعليا
+            # هذا يخلق شكل "سحابة" أو "حزام" بدلاً من خط دائري نحيف
+            random_scatter = random.uniform(10, 22) # مسافة عشوائية عن مركز القطاع
             
-            # --- رسم الحلقات الثلاث (الحالة) ---
-            # الحلقة الخارجية (شهري) - الأكبر
-            fig.add_trace(go.Scatter(
-                x=[stk_x], y=[stk_y], mode='markers',
-                marker=dict(size=18, color=get_color(stock['Monthly']), opacity=0.4),
-                hoverinfo='none', showlegend=False
-            ))
+            stk_x = sec_x + random_scatter * math.cos(stock_angle)
+            stk_y = sec_y + random_scatter * math.sin(stock_angle)
             
-            # الحلقة الوسطى (أسبوعي)
-            fig.add_trace(go.Scatter(
-                x=[stk_x], y=[stk_y], mode='markers',
-                marker=dict(size=12, color=get_color(stock['Weekly']), opacity=0.7),
-                hoverinfo='none', showlegend=False
-            ))
-            
-            # النواة (يومي) + اسم السهم
+            # معلومات السهم للنقر
             hover_text = f"<b>{stock['Name']}</b><br>السعر: {stock['Price']:.2f}<br>يومي: {stock['Daily']}<br>أسبوعي: {stock['Weekly']}<br>شهري: {stock['Monthly']}"
+            
+            # النواة (اليومي)
             fig.add_trace(go.Scatter(
                 x=[stk_x], y=[stk_y], mode='markers',
-                marker=dict(size=6, color=get_color(stock['Daily']), line=dict(color='white', width=1)),
-                text=hover_text, hoverinfo='text', showlegend=False,
-                name=stock['Name']
+                marker=dict(size=8, color=get_color(stock['Daily']), line=dict(color='white', width=1)),
+                text=hover_text, hoverinfo='text', name=stock['Name']
             ))
             
-            # رسم خط خفيف يربط السهم بمركزه (القطاع)
+            # الهالات (أسبوعي وشهري) - تكبير الحجم قليلاً
+            fig.add_trace(go.Scatter(
+                x=[stk_x], y=[stk_y], mode='markers',
+                marker=dict(size=16, color=get_color(stock['Weekly']), opacity=0.6),
+                hoverinfo='none', showlegend=False
+            ))
+            fig.add_trace(go.Scatter(
+                x=[stk_x], y=[stk_y], mode='markers',
+                marker=dict(size=26, color=get_color(stock['Monthly']), opacity=0.3),
+                hoverinfo='none', showlegend=False
+            ))
+            
+            # خط خافت جداً يربط السهم بالقطاع (اختياري، لربط بصري)
             fig.add_trace(go.Scatter(
                 x=[sec_x, stk_x], y=[sec_y, stk_y], mode='lines',
-                line=dict(color='rgba(255,255,255,0.1)', width=0.5),
+                line=dict(color='rgba(255,255,255,0.05)', width=0.5),
                 hoverinfo='none', showlegend=False
             ))
 
-    # --- تنسيق الفضاء ---
+    # --- إعدادات العرض النهائية ---
     fig.update_layout(
         template="plotly_dark",
-        height=850, # شاشة كبيرة
-        paper_bgcolor='#000000', # فضاء أسود
+        height=1000, # شاشة عملاقة
+        width=1000,
+        paper_bgcolor='#000000',
         plot_bgcolor='#000000',
         showlegend=False,
-        xaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
-        yaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
-        margin=dict(l=0, r=0, t=0, b=0),
-        dragmode='pan' # السحب للتحرك في الفضاء
+        # إخفاء المحاور تماماً
+        xaxis=dict(showgrid=False, zeroline=False, showticklabels=False, visible=False),
+        yaxis=dict(showgrid=False, zeroline=False, showticklabels=False, visible=False),
+        # إعدادات التفاعل (Pan & Zoom)
+        dragmode='pan',
+        margin=dict(l=0, r=0, t=0, b=0)
     )
     
-    # تفعيل التكبير بالعجلة
-    st.plotly_chart(fig, use_container_width=True, config={'scrollZoom': True, 'displayModeBar': False})
+    # تفعيل التقريب بالعجلة
+    st.plotly_chart(fig, use_container_width=True, config={'scrollZoom': True, 'displayModeBar': True})
     
-    st.caption("🔍 **دليل الاستخدام:** استخدم عجلة الماوس للتقريب (Zoom) لرؤية التفاصيل. اسحب للتحرك. النقطة المركزية = اليومي، الحلقة الوسطى = الأسبوعي، الحلقة الخارجية = الشهري.")
+    st.info("💡 **طريقة الاستخدام:** استخدم عجلة الماوس للتقريب (Zoom) والدخول داخل القطاعات. الأسهم متباعدة لسهولة النقر.")
 
 else:
-    st.info("🌌 النظام الشمسي جاهز. اضغط زر الإطلاق.")
+    st.write("") # فراغ حتى الضغط
