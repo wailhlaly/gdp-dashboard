@@ -17,28 +17,26 @@ TICKERS = {item['symbol']: item['name'] for item in STOCKS_DB}
 SECTORS_MAP = {item['name']: item['sector'] for item in STOCKS_DB}
 
 # --- 1. إعداد الصفحة ---
-st.set_page_config(page_title="TASI Galaxy Pro", layout="wide", initial_sidebar_state="collapsed")
+st.set_page_config(page_title="TASI Galaxy Touch", layout="wide", initial_sidebar_state="collapsed")
 
 st.markdown("""
 <style>
     @import url('https://fonts.googleapis.com/css2?family=Cairo:wght@400;700&display=swap');
     html, body, [class*="css"] { font-family: 'Cairo', sans-serif; }
     
-    /* خلفية الفضاء العميق */
     .stApp { background-color: #000000; color: #ffffff; }
     
-    /* زر الإطلاق */
     div.stButton > button {
-        background: radial-gradient(circle, #2962ff 0%, #000000 100%);
-        color: white; border: 1px solid #2962ff;
+        background: radial-gradient(circle, #00e676 0%, #000000 100%);
+        color: white; border: 1px solid #00e676;
         padding: 15px 30px; border-radius: 50px;
         font-weight: bold; font-size: 20px; width: 100%;
-        box-shadow: 0 0 25px rgba(41, 98, 255, 0.5);
+        box-shadow: 0 0 25px rgba(0, 230, 118, 0.5);
         transition: transform 0.2s;
     }
     div.stButton > button:hover {
         transform: scale(1.05);
-        box-shadow: 0 0 45px rgba(41, 98, 255, 0.8);
+        box-shadow: 0 0 45px rgba(0, 230, 118, 0.8);
     }
 </style>
 """, unsafe_allow_html=True)
@@ -91,16 +89,16 @@ def get_box_status(df, lookback):
     return latest_status
 
 def get_color(status):
-    if status == "Bull": return "#00e676" # أخضر مشع
-    elif status == "Bear": return "#ff1744" # أحمر مشع
-    else: return "#263238" # رمادي غامق جداً (مطفى)
+    if status == "Bull": return "#00e676" 
+    elif status == "Bear": return "#ff1744" 
+    else: return "#37474f" 
 
 # --- 4. المحرك الرئيسي ---
-st.title("🌌 TASI Galaxy (Live Space View)")
+st.title("🌌 TASI Galaxy (Touch Enabled)")
 
 if 'galaxy_data' not in st.session_state: st.session_state['galaxy_data'] = []
 
-if st.button("🪐 إطلاق المسبار الفضائي (Scan)"):
+if st.button("🚀 إطلاق المسح (Scan)"):
     st.session_state['galaxy_data'] = []
     progress = st.progress(0); status = st.empty()
     tickers = list(TICKERS.keys())
@@ -108,7 +106,7 @@ if st.button("🪐 إطلاق المسبار الفضائي (Scan)"):
     chunk_size = 30
     for i in range(0, len(tickers), chunk_size):
         chunk = tickers[i:i + chunk_size]
-        status.text(f"جاري مسح النظام الشمسي... {i//chunk_size + 1}")
+        status.text(f"جاري التحديث... {i//chunk_size + 1}")
         try:
             raw_daily = yf.download(chunk, period="2y", interval="1d", group_by='ticker', auto_adjust=False, threads=True, progress=False)
             if not raw_daily.empty:
@@ -136,117 +134,130 @@ if st.button("🪐 إطلاق المسبار الفضائي (Scan)"):
                     except: continue
         except: pass
         progress.progress(min((i + chunk_size) / len(tickers), 1.0))
-    progress.empty(); status.success("تم بناء المجرة!")
+    progress.empty(); status.success("جاهز!")
 
-# --- 5. رسم المجرة (Advanced Solar System) ---
+# --- 5. الرسم (تعديلات اللمس) ---
 if st.session_state['galaxy_data']:
     df = pd.DataFrame(st.session_state['galaxy_data'])
     
     fig = go.Figure()
     
-    # 0. خلفية النجوم (Starfield) لإعطاء عمق
-    # ننشئ 200 نقطة عشوائية بيضاء في الخلفية
-    star_x = [random.uniform(-150, 150) for _ in range(300)]
-    star_y = [random.uniform(-150, 150) for _ in range(300)]
+    # نجوم الخلفية
+    star_x = [random.uniform(-150, 150) for _ in range(400)]
+    star_y = [random.uniform(-150, 150) for _ in range(400)]
     fig.add_trace(go.Scatter(
         x=star_x, y=star_y, mode='markers',
-        marker=dict(size=2, color='white', opacity=0.3),
-        hoverinfo='none'
+        marker=dict(size=1.5, color='white', opacity=0.2),
+        hoverinfo='skip' # تجاهل النجوم عند اللمس
     ))
 
-    # 1. الشمس (TASI)
+    # الشمس (تاسي)
     fig.add_trace(go.Scatter(
         x=[0], y=[0], mode='markers+text',
-        marker=dict(size=80, color='#ffab00', line=dict(color='#ffd600', width=6), opacity=0.9),
+        marker=dict(size=90, color='#ffab00', line=dict(color='#ffd600', width=4), opacity=1),
         text=["<b>TASI</b>"], textposition="middle center",
-        textfont=dict(color='black', size=16, family="Cairo"),
-        hoverinfo='none'
+        textfont=dict(color='black', size=18, family="Cairo"),
+        hoverinfo='skip'
     ))
     
-    # توزيع القطاعات
     sectors = df['Sector'].unique()
-    # زيادة نصف القطر بشكل كبير لإعطاء مساحة
     sector_radius = 65 
     
     for i, sec in enumerate(sectors):
-        # زاوية القطاع
         sec_angle = (2 * math.pi * i) / len(sectors)
         sec_x = sector_radius * math.cos(sec_angle)
         sec_y = sector_radius * math.sin(sec_angle)
         
-        # رسم كوكب القطاع
+        # الكوكب (القطاع)
         fig.add_trace(go.Scatter(
             x=[sec_x], y=[sec_y], mode='markers+text',
-            marker=dict(size=35, color='#2962ff', line=dict(color='#82b1ff', width=2), opacity=0.9),
+            marker=dict(size=40, color='#2962ff', line=dict(color='#82b1ff', width=2), opacity=0.9),
             text=[sec], textposition="bottom center",
-            textfont=dict(color='#e3f2fd', size=14, weight="bold"),
-            hoverinfo='none'
+            textfont=dict(color='#e3f2fd', size=16, weight="bold"),
+            hoverinfo='none' # لا نريد تفاصيل للقطاع نفسه عند اللمس، بل للأسهم
         ))
         
-        # توزيع أسهم القطاع (سحابة حول الكوكب)
         sec_stocks = df[df['Sector'] == sec]
         num_stocks = len(sec_stocks)
         
+        # تجميع إحداثيات وبيانات الأسهم لرسمها في Trace واحد لكل قطاع (أسرع وأخف)
+        stk_xs = []; stk_ys = []; stk_colors = []; stk_sizes = []; stk_texts = []
+        halo_w_x = []; halo_w_y = []; halo_w_c = []
+        halo_m_x = []; halo_m_y = []; halo_m_c = []
+        
         for j, (_, stock) in enumerate(sec_stocks.iterrows()):
             stock_angle = (2 * math.pi * j) / num_stocks
+            dist = random.uniform(12, 25) # مسافة الانتشار
             
-            # --- التحسين الجوهري: تباعد عشوائي ---
-            # بدلاً من نصف قطر ثابت، نجعله يتراوح بين قيمة دنيا وعليا
-            # هذا يخلق شكل "سحابة" أو "حزام" بدلاً من خط دائري نحيف
-            random_scatter = random.uniform(10, 22) # مسافة عشوائية عن مركز القطاع
+            sx = sec_x + dist * math.cos(stock_angle)
+            sy = sec_y + dist * math.sin(stock_angle)
             
-            stk_x = sec_x + random_scatter * math.cos(stock_angle)
-            stk_y = sec_y + random_scatter * math.sin(stock_angle)
+            # بيانات السهم (للمس)
+            # تنسيق HTML للنص ليظهر بشكل جميل
+            ht = f"""
+            <b style='font-size:16px'>{stock['Name']}</b><br>
+            السعر: {stock['Price']:.2f}<br>
+            📅 يومي: {stock['Daily']}<br>
+            🗓️ أسبوعي: {stock['Weekly']}<br>
+            📆 شهري: {stock['Monthly']}
+            """
             
-            # معلومات السهم للنقر
-            hover_text = f"<b>{stock['Name']}</b><br>السعر: {stock['Price']:.2f}<br>يومي: {stock['Daily']}<br>أسبوعي: {stock['Weekly']}<br>شهري: {stock['Monthly']}"
+            # النواة
+            stk_xs.append(sx); stk_ys.append(sy)
+            stk_colors.append(get_color(stock['Daily']))
+            stk_texts.append(ht)
             
-            # النواة (اليومي)
-            fig.add_trace(go.Scatter(
-                x=[stk_x], y=[stk_y], mode='markers',
-                marker=dict(size=8, color=get_color(stock['Daily']), line=dict(color='white', width=1)),
-                text=hover_text, hoverinfo='text', name=stock['Name']
-            ))
-            
-            # الهالات (أسبوعي وشهري) - تكبير الحجم قليلاً
-            fig.add_trace(go.Scatter(
-                x=[stk_x], y=[stk_y], mode='markers',
-                marker=dict(size=16, color=get_color(stock['Weekly']), opacity=0.6),
-                hoverinfo='none', showlegend=False
-            ))
-            fig.add_trace(go.Scatter(
-                x=[stk_x], y=[stk_y], mode='markers',
-                marker=dict(size=26, color=get_color(stock['Monthly']), opacity=0.3),
-                hoverinfo='none', showlegend=False
-            ))
-            
-            # خط خافت جداً يربط السهم بالقطاع (اختياري، لربط بصري)
-            fig.add_trace(go.Scatter(
-                x=[sec_x, stk_x], y=[sec_y, stk_y], mode='lines',
-                line=dict(color='rgba(255,255,255,0.05)', width=0.5),
-                hoverinfo='none', showlegend=False
-            ))
+            # الهالات
+            halo_w_x.append(sx); halo_w_y.append(sy); halo_w_c.append(get_color(stock['Weekly']))
+            halo_m_x.append(sx); halo_m_y.append(sy); halo_m_c.append(get_color(stock['Monthly']))
 
-    # --- إعدادات العرض النهائية ---
+        # رسم الهالات أولاً (لتبقى في الخلف)
+        fig.add_trace(go.Scatter(
+            x=halo_m_x, y=halo_m_y, mode='markers',
+            marker=dict(size=28, color=halo_m_c, opacity=0.3),
+            hoverinfo='skip'
+        ))
+        fig.add_trace(go.Scatter(
+            x=halo_w_x, y=halo_w_y, mode='markers',
+            marker=dict(size=18, color=halo_w_c, opacity=0.6),
+            hoverinfo='skip'
+        ))
+        
+        # رسم الأنوية (التي تتفاعل مع اللمس)
+        fig.add_trace(go.Scatter(
+            x=stk_xs, y=stk_ys, mode='markers',
+            marker=dict(size=10, color=stk_colors, line=dict(color='white', width=1)),
+            text=stk_texts,
+            hoverinfo='text', # عرض النص المخصص فقط
+            hovertemplate="%{text}<extra></extra>", # إزالة اسم الـ Trace المزعج
+            name=sec
+        ))
+
+    # --- إعدادات اللمس والتفاعل ---
     fig.update_layout(
         template="plotly_dark",
-        height=1000, # شاشة عملاقة
-        width=1000,
+        height=1000,
         paper_bgcolor='#000000',
         plot_bgcolor='#000000',
         showlegend=False,
-        # إخفاء المحاور تماماً
-        xaxis=dict(showgrid=False, zeroline=False, showticklabels=False, visible=False),
-        yaxis=dict(showgrid=False, zeroline=False, showticklabels=False, visible=False),
-        # إعدادات التفاعل (Pan & Zoom)
-        dragmode='pan',
-        margin=dict(l=0, r=0, t=0, b=0)
+        xaxis=dict(visible=False, fixedrange=False), # fixedrange=False يسمح بالزوم
+        yaxis=dict(visible=False, fixedrange=False),
+        margin=dict(l=0, r=0, t=0, b=0),
+        
+        # --- السحر هنا (إعدادات اللمس) ---
+        hovermode='closest', # يلتقط أقرب نقطة للإصبع
+        hoverdistance=100,   # مسافة الالتقاط (كبيرة لتسهيل اللمس)
+        spikedistance=100,   # تحسين الاستجابة
+        dragmode='pan'       # التحرك بالسحب
     )
     
-    # تفعيل التقريب بالعجلة
-    st.plotly_chart(fig, use_container_width=True, config={'scrollZoom': True, 'displayModeBar': True})
+    st.plotly_chart(fig, use_container_width=True, config={
+        'scrollZoom': True,
+        'displayModeBar': False, # إخفاء الشريط العلوي لتجربة أنظف
+        'doubleClick': 'reset'
+    })
     
-    st.info("💡 **طريقة الاستخدام:** استخدم عجلة الماوس للتقريب (Zoom) والدخول داخل القطاعات. الأسهم متباعدة لسهولة النقر.")
+    st.info("💡 **نصيحة:** اقترب من أي كوكب أخضر لترى تفاصيل السهم فوراً.")
 
 else:
-    st.write("") # فراغ حتى الضغط
+    st.write("")
