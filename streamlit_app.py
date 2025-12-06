@@ -2,324 +2,315 @@ import streamlit as st
 import yfinance as yf
 import pandas as pd
 import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 import time
+import base64
 
-# --- 1. إعداد الصفحة وتصميم الوضع الليلي (Dark Mode) ---
-st.set_page_config(page_title="TASI Dark Pro", layout="wide", initial_sidebar_state="collapsed")
+# --- 1. إعداد الصفحة والوضع الليلي الاحترافي ---
+st.set_page_config(page_title="Saudi Market Pro", layout="wide", initial_sidebar_state="expanded")
 
-# حقن CSS لتغيير الألوان بالكامل إلى نمط TradingView
+# CSS متقدم لتحسين الواجهة
 st.markdown("""
 <style>
-    /* الخلفية العامة */
-    .stApp {
-        background-color: #131722;
-        color: #d1d4dc;
-    }
+    /* تحسين الخلفية والخطوط */
+    .stApp { background-color: #0e1117; color: #FAFAFA; }
     
-    /* الجداول */
-    .stDataFrame {
-        border: 1px solid #2a2e39;
-    }
-    div[data-testid="stDataFrame"] div[class*="css"] {
-        background-color: #1e222d;
-        color: white;
-    }
+    /* تنسيق الجداول لتشبه منصات التداول */
+    .stDataFrame { border: 1px solid #30333d; border-radius: 5px; }
+    div[data-testid="stDataFrame"] div[class*="css"] { background-color: #161b24; color: white; }
     
-    /* الأزرار */
-    div.stButton > button {
-        background-color: #2962ff;
-        color: white;
-        border: none;
-        border-radius: 4px;
-        font-weight: bold;
-        padding: 0.5rem 1rem;
-    }
-    div.stButton > button:hover {
-        background-color: #1e53e5;
-        border: none;
-        color: white;
-    }
-    
-    /* البطاقات (Metrics) */
+    /* البطاقات العلوية Metrics */
     div[data-testid="stMetric"] {
-        background-color: #1e222d;
+        background-color: #1d212b;
+        border: 1px solid #30333d;
         padding: 15px;
         border-radius: 8px;
-        border: 1px solid #2a2e39;
-        box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+        box-shadow: 0 2px 5px rgba(0,0,0,0.5);
     }
-    div[data-testid="stMetricLabel"] {
-        color: #787b86;
-    }
-    div[data-testid="stMetricValue"] {
-        color: #d1d4dc;
-    }
+    div[data-testid="stMetricValue"] { color: #4CAF50; font-weight: bold; }
     
-    /* العناوين */
-    h1, h2, h3 {
-        color: #d1d4dc !important;
-        font-family: 'Segoe UI', sans-serif;
+    /* الأزرار */
+    .stButton > button {
+        background: linear-gradient(45deg, #2962ff, #1e88e5);
+        color: white;
+        border: none;
+        font-weight: bold;
     }
+    .stButton > button:hover { opacity: 0.9; }
     
     /* التبويبات */
-    .stTabs [data-baseweb="tab-list"] {
-        gap: 10px;
-        background-color: #131722;
-    }
+    .stTabs [data-baseweb="tab-list"] { gap: 8px; background-color: #0e1117; }
     .stTabs [data-baseweb="tab"] {
-        background-color: #1e222d;
-        border-radius: 4px;
-        color: #d1d4dc;
-        border: 1px solid #2a2e39;
+        background-color: #1d212b; border-radius: 4px; color: #b0b3b8;
     }
     .stTabs [aria-selected="true"] {
-        background-color: #2962ff !important;
-        color: white !important;
+        background-color: #2962ff !important; color: white !important;
     }
 </style>
 """, unsafe_allow_html=True)
 
-# --- 2. القائمة الكاملة (تضمين جميع الشركات لضمان المسح الشامل) ---
+# --- 2. الإعدادات والقائمة الجانبية ---
+with st.sidebar:
+    st.title("⚙️ إعدادات الماسح")
+    st.caption("تحكم في معايير الاستراتيجية")
+    
+    RSI_PERIOD = st.number_input("فترة RSI", min_value=7, max_value=30, value=24)
+    EMA_PERIOD = st.number_input("فترة EMA", min_value=5, max_value=50, value=8)
+    RSI_BUY_LEVEL = st.slider("مستوى دخول RSI", 20, 50, 30)
+    
+    st.divider()
+    st.markdown("### ℹ️ عن الاستراتيجية")
+    st.info("""
+    **استراتيجية القناص المطور:**
+    1. اختراق RSI لمستوى التشبع.
+    2. السعر يخترق متوسط EMA.
+    3. (جديد) تقاطع MACD إيجابي.
+    """)
+
+# --- 3. قائمة الأسهم (مختصرة للسرعة، أضف قائمتك الكاملة هنا) ---
+# ملاحظة: يمكنك لصق قائمتك الطويلة هنا بدلاً من هذه العينة
 TICKERS = {
-    # الطاقة والمواد الأساسية
-    "2222.SR": "أرامكو", "2010.SR": "سابك", "1211.SR": "معادن", "2020.SR": "سابك للمغذيات", "2310.SR": "سبكيم",
-    "2290.SR": "ينساب", "2060.SR": "التصنيع", "2330.SR": "المتقدمة", "2350.SR": "كيان", "2001.SR": "كيمانول",
-    "2170.SR": "اللجين", "2380.SR": "رابغ", "2381.SR": "الحفر العربية", "2382.SR": "أديس", "4030.SR": "البحري",
-    "4200.SR": "الدريس", "5110.SR": "الكهرباء", "2030.SR": "المصافي", "2080.SR": "الغاز", "2150.SR": "زجاج",
-    "2180.SR": "فيبكو", "2200.SR": "أنابيب", "2210.SR": "نما", "2230.SR": "الكيميائية", "2240.SR": "الزامل",
-    "2250.SR": "المجموعة", "2300.SR": "صناعة الورق", "2320.SR": "البابطين", "2340.SR": "العبداللطيف", "2360.SR": "الفخارية",
-    "2370.SR": "مسك", "1301.SR": "أسلاك", "1304.SR": "اليمامة للحديد", "1320.SR": "أنابيب الشرق", "1321.SR": "أنابيب السعودية",
-    
-    # الأسمنتات
-    "3010.SR": "أسمنت العربية", "3020.SR": "أسمنت اليمامة", "3030.SR": "أسمنت السعودية", "3040.SR": "أسمنت القصيم",
-    "3050.SR": "أسمنت الجنوب", "3060.SR": "أسمنت ينبع", "3080.SR": "أسمنت الشرقية", "3090.SR": "أسمنت تبوك",
-    "3091.SR": "أسمنت الجوف", "3001.SR": "أسمنت حائل", "3002.SR": "أسمنت نجران", "3003.SR": "أسمنت المدينة",
-    "3004.SR": "أسمنت الشمالية", "3005.SR": "أسمنت أم القرى", "3007.SR": "زهرة الواحة", "3008.SR": "الكثيري",
-
-    # البنوك والاستثمار
-    "1120.SR": "الراجحي", "1180.SR": "الأهلي", "1010.SR": "الرياض", "1150.SR": "الإنماء", "1060.SR": "الأول",
-    "1140.SR": "البلاد", "1030.SR": "الاستثمار", "1020.SR": "الجزيرة", "1080.SR": "العربي", "1050.SR": "الفرنسي",
-    "1111.SR": "تداول", "1182.SR": "أملاك", "1183.SR": "سهل", "4081.SR": "النايفات", "4280.SR": "المملكة",
-
+    # الطاقة والمواد
+    "2222.SR": "أرامكو", "2010.SR": "سابك", "1211.SR": "معادن", "2020.SR": "سابك للمغذيات",
+    "4030.SR": "البحري", "4200.SR": "الدريس", "5110.SR": "الكهرباء", "2310.SR": "سبكيم",
+    # البنوك
+    "1120.SR": "الراجحي", "1180.SR": "الأهلي", "1010.SR": "الرياض", "1150.SR": "الإنماء",
+    "1060.SR": "الأول", "1140.SR": "البلاد",
     # الاتصالات والتقنية
-    "7010.SR": "STC", "7020.SR": "موبايلي", "7030.SR": "زين", "7040.SR": "عذيب", "7200.SR": "سلوشنز",
-    "7201.SR": "بحر العرب", "7202.SR": "علم", "7203.SR": "توبي",
-
-    # التجزئة، الأغذية، الخدمات
-    "4190.SR": "جرير", "4001.SR": "العثيم", "4003.SR": "إكسترا", "4164.SR": "النهدي", "2280.SR": "المراعي",
-    "2270.SR": "سدافكو", "6002.SR": "هرفي", "6004.SR": "التموين", "6010.SR": "نادك", "6020.SR": "جاكو",
-    "6040.SR": "تبوك الزراعية", "6050.SR": "الأسماك", "6060.SR": "الشرقية الزراعية", "6070.SR": "الجوف",
-    "6090.SR": "جازادكو", "1810.SR": "سيرا", "1820.SR": "الحكير", "1830.SR": "وقت اللياقة", "4260.SR": "بدجت",
-    "4261.SR": "ذيب", "4262.SR": "لومي", "4031.SR": "الخدمات الأرضية", "4263.SR": "سال",
-
-    # الصحة والتأمين
-    "4002.SR": "المواساة", "4004.SR": "دلة", "4007.SR": "الحمادي", "4009.SR": "الألماني", "4013.SR": "سليمان الحبيب",
-    "8010.SR": "التعاونية", "8210.SR": "بوبا", "8230.SR": "الراجحي تكافل", "8012.SR": "جزيرة تكافل", "8020.SR": "ملاذ",
-    "8030.SR": "ميدغلف", "8040.SR": "أليانز", "8050.SR": "سلامة", "8060.SR": "ولاء", "8070.SR": "الدرع",
-    "8100.SR": "سايكو", "8120.SR": "اتحاد الخليج", "8150.SR": "أسيج", "8160.SR": "التأمين العربية", "8170.SR": "الاتحاد",
-    "8200.SR": "إعادة", "8250.SR": "جي جي", "8270.SR": "بروج", "8310.SR": "أمانة", "8311.SR": "عناية",
-
-    # العقار والتطوير
-    "4300.SR": "دار الأركان", "4250.SR": "جبل عمر", "4220.SR": "إعمار", "4321.SR": "المراكز", "4230.SR": "البحر الأحمر",
-    "4090.SR": "طيبة", "4100.SR": "مكة", "4150.SR": "التعمير", "4310.SR": "مدينة المعرفة", "4320.SR": "الأندلس",
-    "4322.SR": "رتال", "4323.SR": "سمو",
-    
+    "7010.SR": "STC", "7020.SR": "موبايلي", "7030.SR": "زين", "7202.SR": "علم",
+    "7200.SR": "سلوشنز",
+    # التجزئة والصحة
+    "4190.SR": "جرير", "4002.SR": "المواساة", "4013.SR": "سليمان الحبيب", "2280.SR": "المراعي",
+    "8010.SR": "التعاونية", "8210.SR": "بوبا",
+    # العقار
+    "4300.SR": "دار الأركان", "4250.SR": "جبل عمر", "4090.SR": "طيبة", "4321.SR": "المراكز",
     # المؤشر
     "^TASI.SR": "المؤشر العام"
 }
 
-# --- 3. الإعدادات والدوال ---
-RSI_PERIOD = 24
-EMA_PERIOD = 8
-
-def calculate_rsi_rma(series, period):
-    delta = series.diff()
+# --- 4. الدوال الحسابية المتقدمة ---
+def calculate_indicators(df):
+    # RSI (RMA Method)
+    delta = df['Close'].diff()
     gain = delta.clip(lower=0)
     loss = -delta.clip(upper=0)
-    avg_gain = gain.ewm(alpha=1/period, min_periods=period, adjust=False).mean()
-    avg_loss = loss.ewm(alpha=1/period, min_periods=period, adjust=False).mean()
+    avg_gain = gain.ewm(alpha=1/RSI_PERIOD, min_periods=RSI_PERIOD, adjust=False).mean()
+    avg_loss = loss.ewm(alpha=1/RSI_PERIOD, min_periods=RSI_PERIOD, adjust=False).mean()
     rs = avg_gain / avg_loss
-    rsi = 100 - (100 / (1 + rs))
-    return rsi
-
-def calculate_ema(series, period):
-    return series.ewm(span=period, adjust=False).mean()
-
-# --- 4. واجهة التطبيق ---
-
-# Header
-c1, c2 = st.columns([1, 5])
-with c1:
-    st.image("https://cdn-icons-png.flaticon.com/512/3310/3310636.png", width=70)
-with c2:
-    st.title("الماسح الاحترافي (Dark Pro)")
-    st.caption(f"عدد الشركات في قاعدة البيانات: {len(TICKERS)} | الإستراتيجية: RSI 30 Breakout + EMA 8")
-
-# زر التشغيل الكبير
-if st.button("تشغيل المسح الكامل للسوق (Scan All)", use_container_width=True):
+    df['RSI'] = 100 - (100 / (1 + rs))
     
-    # تهيئة المتغيرات
-    summary_data = []
-    signals_data = []
+    # EMA
+    df['EMA'] = df['Close'].ewm(span=EMA_PERIOD, adjust=False).mean()
     
-    # واجهة التقدم
-    progress_text = st.empty()
-    bar = st.progress(0)
+    # MACD (12, 26, 9)
+    exp1 = df['Close'].ewm(span=12, adjust=False).mean()
+    exp2 = df['Close'].ewm(span=26, adjust=False).mean()
+    df['MACD'] = exp1 - exp2
+    df['Signal_Line'] = df['MACD'].ewm(span=9, adjust=False).mean()
     
-    # تحضير القائمة والتقسيم للدفعات
+    # نسبة التغير اليومي
+    df['Change%'] = df['Close'].pct_change() * 100
+    
+    return df
+
+# --- 5. المنطق الرئيسي (Engine) ---
+st.title("📊 منصة التحليل الذكي (Saudi Market Pro)")
+
+col_btn, col_kpi = st.columns([1, 3])
+with col_btn:
+    start_scan = st.button("🚀 بدء المسح الشامل", use_container_width=True)
+
+if start_scan:
+    st.session_state['data'] = []
+    st.session_state['signals'] = []
+    st.session_state['market_history'] = {} # لحفظ البيانات للرسم
+    
     tickers_list = list(TICKERS.keys())
-    total_stocks = len(tickers_list)
-    chunk_size = 50 # 50 سهم في كل دفعة
+    progress_bar = st.progress(0)
+    status_text = st.empty()
     
-    for i in range(0, total_stocks, chunk_size):
-        chunk = tickers_list[i:i + chunk_size]
+    # تحميل البيانات (دفعة واحدة للسرعة)
+    status_text.text("⏳ جاري الاتصال بالسوق وسحب البيانات...")
+    try:
+        raw_data = yf.download(tickers_list, period="6mo", interval="1d", group_by='ticker', auto_adjust=False, threads=True, progress=False)
         
-        # تحديث النص
-        progress_text.markdown(f"**⏳ جاري معالجة الدفعة {i//chunk_size + 1} (الأسهم من {i} إلى {min(i+chunk_size, total_stocks)})...**")
-        
-        try:
-            # تحميل الدفعة
-            data = yf.download(chunk, period="6mo", interval="1d", group_by='ticker', auto_adjust=False, threads=True, progress=False)
-            
-            if not data.empty:
-                for symbol in chunk:
-                    try:
-                        # التأكد من وجود البيانات
-                        try:
-                            df = data[symbol].copy()
-                        except KeyError:
-                            continue
+        if not raw_data.empty:
+            for i, symbol in enumerate(tickers_list):
+                try:
+                    name = TICKERS[symbol]
+                    try: df = raw_data[symbol].copy()
+                    except: continue
 
-                        # توحيد اسم العمود
-                        col_name = 'Close' if 'Close' in df.columns else 'Adj Close'
-                        if col_name not in df.columns: continue
+                    col = 'Close' if 'Close' in df.columns else 'Adj Close'
+                    if col in df.columns:
+                        df = df.rename(columns={col: 'Close'})
+                        df = df.dropna()
                         
-                        series = df[col_name].dropna()
-                        
-                        if len(series) > 60:
-                            # الحسابات الفنية
-                            rsi = calculate_rsi_rma(series, RSI_PERIOD)
-                            ema = calculate_ema(series, EMA_PERIOD)
+                        if len(df) > 50:
+                            # حساب المؤشرات
+                            df = calculate_indicators(df)
                             
-                            last_price = series.iloc[-1]
-                            last_rsi = rsi.iloc[-1]
+                            last_row = df.iloc[-1]
+                            prev_row = df.iloc[-2]
                             
-                            # إضافة للملخص العام
-                            if not np.isnan(last_rsi):
-                                summary_data.append({
-                                    "الاسم": TICKERS.get(symbol, symbol),
-                                    "الرمز": symbol,
-                                    "السعر": last_price,
-                                    "RSI": last_rsi
-                                })
+                            # حفظ البيانات
+                            st.session_state['market_history'][name] = df
                             
-                            # استراتيجية القناص (آخر 3 أيام)
-                            # ننشئ داتا فريم صغير للفحص
-                            check_df = pd.DataFrame({
-                                'RSI': rsi.tail(4),
-                                'Price': series.tail(4),
-                                'EMA': ema.tail(4)
+                            # تسجيل الملخص
+                            st.session_state['data'].append({
+                                "الرمز": symbol, "الاسم": name,
+                                "السعر": last_row['Close'],
+                                "التغير": last_row['Change%'],
+                                "RSI": last_row['RSI'],
+                                "MACD": last_row['MACD'],
+                                "Signal": last_row['Signal_Line']
                             })
                             
-                            if len(check_df) == 4:
-                                rsi_cross = False
-                                ema_cross = False
+                            # --- منطق القناص (Signals) ---
+                            # فحص آخر 3 أيام
+                            tail = df.tail(4)
+                            if len(tail) == 4:
+                                rsi_break = False
+                                ema_break = False
                                 
-                                # فحص الأيام الثلاثة الأخيرة
                                 for idx in range(1, 4):
-                                    # اختراق RSI 30
-                                    if check_df['RSI'].iloc[idx-1] <= 30 and check_df['RSI'].iloc[idx] > 30:
-                                        rsi_cross = True
-                                    # اختراق EMA 8
-                                    if check_df['Price'].iloc[idx-1] <= check_df['EMA'].iloc[idx-1] and check_df['Price'].iloc[idx] > check_df['EMA'].iloc[idx]:
-                                        ema_cross = True
+                                    # RSI Crossing Up
+                                    if tail['RSI'].iloc[idx-1] <= RSI_BUY_LEVEL and tail['RSI'].iloc[idx] > RSI_BUY_LEVEL:
+                                        rsi_break = True
+                                    # Price Crossing EMA
+                                    if tail['Close'].iloc[idx-1] <= tail['EMA'].iloc[idx-1] and tail['Close'].iloc[idx] > tail['EMA'].iloc[idx]:
+                                        ema_break = True
                                 
-                                if rsi_cross and ema_cross:
-                                    signals_data.append({
-                                        "الاسم": TICKERS.get(symbol, symbol),
-                                        "السعر": last_price,
-                                        "RSI": last_rsi,
-                                        "الحالة": "BUY SIGNAL 🚀"
+                                if rsi_break and ema_break:
+                                    # إضافة شرط MACD إيجابي لزيادة الذكاء
+                                    macd_conf = "✅ إيجابي" if last_row['MACD'] > last_row['Signal_Line'] else "⚠️ سلبي"
+                                    st.session_state['signals'].append({
+                                        "الاسم": name,
+                                        "السعر": last_row['Close'],
+                                        "RSI": last_row['RSI'],
+                                        "MACD": macd_conf,
+                                        "الوقت": "آخر 3 أيام"
                                     })
-                    except Exception:
-                        continue
-        except Exception:
-            pass
-        
-        # تحديث الشريط
-        bar.progress(min((i + chunk_size) / total_stocks, 1.0))
-        time.sleep(0.2) # استراحة قصيرة جداً
-
-    bar.empty()
-    progress_text.success("✅ اكتمل المسح!")
+                                    
+                except Exception as e: continue
+                progress_bar.progress((i + 1) / len(tickers_list))
+                
+    except Exception as e: st.error(f"حدث خطأ: {e}")
     
-    # حفظ النتائج
-    st.session_state['summary'] = summary_data
-    st.session_state['signals'] = signals_data
+    progress_bar.empty()
+    status_text.success("تم التحديث!")
 
-# --- 5. عرض النتائج (Dashboard) ---
+# --- 6. لوحة القيادة (Dashboard) ---
 
-if 'summary' in st.session_state and st.session_state['summary']:
+if 'data' in st.session_state and st.session_state['data']:
+    df_all = pd.DataFrame(st.session_state['data'])
     
-    # عدادات المعلومات (Stats)
-    kpi1, kpi2, kpi3 = st.columns(3)
-    kpi1.metric("الشركات التي تم فحصها", len(st.session_state['summary']))
-    kpi2.metric("الفرص الذهبية (Sniper)", len(st.session_state['signals']), delta_color="normal")
+    # إحصائيات علوية
+    kpi1, kpi2, kpi3, kpi4 = st.columns(4)
+    kpi1.metric("عدد الشركات", len(df_all))
+    kpi2.metric("فرص القناص", len(st.session_state['signals']))
     
-    avg_rsi = np.mean([d['RSI'] for d in st.session_state['summary']])
-    kpi3.metric("متوسط RSI للسوق", f"{avg_rsi:.2f}")
-
+    bullish_count = len(df_all[df_all['Change'] > 0])
+    kpi3.metric("الشركات الصاعدة 🟢", bullish_count)
+    
+    bearish_count = len(df_all[df_all['Change'] < 0])
+    kpi4.metric("الشركات الهابطة 🔴", bearish_count)
+    
     st.markdown("---")
-
-    # التبويبات
-    tab1, tab2 = st.tabs(["💎 الفرص الذهبية", "📊 السوق بالكامل"])
     
-    # --- TAB 1: الفرص ---
+    # التبويبات
+    tab1, tab2, tab3 = st.tabs(["🎯 إشارات الدخول", "📊 ماسح السوق الشامل", "📈 الشارت التفاعلي"])
+    
+    # --- TAB 1: القناص ---
     with tab1:
         if st.session_state['signals']:
-            st.markdown("### أسهم حققت شروط الدخول (RSI Breakout + EMA Cross)")
-            df_signals = pd.DataFrame(st.session_state['signals'])
-            
-            # تنسيق الجدول الاحترافي
+            st.markdown("#### أسهم حققت شروط الاختراق (RSI + EMA)")
+            df_sig = pd.DataFrame(st.session_state['signals'])
             st.dataframe(
-                df_signals.style.format({"السعر": "{:.2f}", "RSI": "{:.2f}"})
-                .set_properties(**{
-                    'background-color': '#1e222d',
-                    'color': '#00ff00', # أخضر فسفوري
-                    'font-weight': 'bold',
-                    'border': '1px solid #333'
-                }),
+                df_sig.style.format({"السعر": "{:.2f}", "RSI": "{:.2f}"})
+                .background_gradient(cmap='Greens', subset=['RSI']),
                 use_container_width=True
             )
         else:
-            st.info("لم يتم العثور على فرص تطابق الشروط بدقة في آخر 3 أيام.")
-
-    # --- TAB 2: السوق الكامل ---
+            st.info("لا توجد إشارات اختراق مؤكدة حالياً.")
+            
+    # --- TAB 2: الماسح الشامل ---
     with tab2:
-        st.markdown("### نظرة شاملة (مرتبة حسب RSI)")
-        df_all = pd.DataFrame(st.session_state['summary'])
-        df_all = df_all.sort_values(by="RSI", ascending=False)
+        # فلاتر ذكية
+        col_f1, col_f2 = st.columns(2)
+        with col_f1:
+            sort_by = st.selectbox("ترتيب حسب:", ["RSI (الأعلى)", "RSI (الأقل)", "الأكثر ارتفاعاً %", "الأكثر انخفاضاً %"])
+        with col_f2:
+            search_txt = st.text_input("بحث عن شركة (اكتب الاسم):")
+            
+        # تطبيق الفلاتر
+        df_view = df_all.copy()
+        if search_txt:
+            df_view = df_view[df_view['الاسم'].str.contains(search_txt)]
+            
+        if sort_by == "RSI (الأعلى)": df_view = df_view.sort_values('RSI', ascending=False)
+        elif sort_by == "RSI (الأقل)": df_view = df_view.sort_values('RSI', ascending=True)
+        elif sort_by == "الأكثر ارتفاعاً %": df_view = df_view.sort_values('التغير', ascending=False)
+        else: df_view = df_view.sort_values('التغير', ascending=True)
         
-        # دالة تلوين متقدمة (Dark Theme Style)
-        def style_dark_table(val):
-            color = '#d1d4dc' # رمادي فاتح افتراضي
-            weight = 'normal'
-            
-            if val >= 70:
-                color = '#ff5252' # أحمر فاتح
-                weight = 'bold'
-            elif val <= 30:
-                color = '#4caf50' # أخضر فاتح
-                weight = 'bold'
-            
-            return f'color: {color}; font-weight: {weight};'
-
+        # تلوين الجدول
+        def color_change(val):
+            color = '#00ff00' if val > 0 else '#ff0000'
+            return f'color: {color}'
+        
         st.dataframe(
-            df_all.style.map(style_dark_table, subset=['RSI'])
-            .format({"السعر": "{:.2f}", "RSI": "{:.2f}"}),
+            df_view.style.format({"السعر": "{:.2f}", "التغير": "{:.2f}%", "RSI": "{:.2f}", "MACD": "{:.3f}"})
+            .map(color_change, subset=['التغير'])
+            .background_gradient(cmap='RdYlGn', subset=['RSI']),
             use_container_width=True,
-            height=600
+            height=500
         )
+        
+        # زر تحميل البيانات
+        csv = df_view.to_csv(index=False).encode('utf-8')
+        st.download_button("📥 تحميل التقرير (Excel/CSV)", csv, "market_report.csv", "text/csv")
+
+    # --- TAB 3: الشارت التفاعلي ---
+    with tab3:
+        st.markdown("#### التحليل الفني المتقدم")
+        selected_stock = st.selectbox("اختر الشركة لعرض الشارت:", df_all['الاسم'].tolist())
+        
+        if selected_stock:
+            df_chart = st.session_state['market_history'][selected_stock]
+            
+            # رسم الشارت باستخدام Plotly (شموع يابانية)
+            fig = make_subplots(rows=2, cols=1, shared_xaxes=True, 
+                                vertical_spacing=0.03, subplot_titles=(f'{selected_stock} Price & EMA', 'RSI'), 
+                                row_width=[0.2, 0.7])
+
+            # 1. الشموع
+            fig.add_trace(go.Candlestick(x=df_chart.index,
+                            open=df_chart['Open'], high=df_chart['High'],
+                            low=df_chart['Low'], close=df_chart['Close'], name='Price'), row=1, col=1)
+            
+            # 2. خط EMA
+            fig.add_trace(go.Scatter(x=df_chart.index, y=df_chart['EMA'], 
+                                     line=dict(color='orange', width=1), name=f'EMA {EMA_PERIOD}'), row=1, col=1)
+
+            # 3. مؤشر RSI
+            fig.add_trace(go.Scatter(x=df_chart.index, y=df_chart['RSI'], 
+                                     line=dict(color='purple', width=2), name='RSI'), row=2, col=1)
+            
+            # خطوط 30 و 70 للـ RSI
+            fig.add_hline(y=70, line_dash="dash", line_color="red", row=2, col=1)
+            fig.add_hline(y=30, line_dash="dash", line_color="green", row=2, col=1)
+
+            # تنسيق الخلفية (Dark Mode)
+            fig.update_layout(
+                template="plotly_dark",
+                height=600,
+                xaxis_rangeslider_visible=False,
+                paper_bgcolor='#161b24',
+                plot_bgcolor='#161b24'
+            )
+            
+            st.plotly_chart(fig, use_container_width=True)
 
 else:
-    st.info("اضغط زر 'تشغيل المسح' للبدء.")
+    st.info("👈 اضغط على زر 'بدء المسح الشامل' لتحميل البيانات.")
