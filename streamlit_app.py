@@ -17,27 +17,25 @@ TICKERS = {item['symbol']: item['name'] for item in STOCKS_DB}
 SECTORS_MAP = {item['name']: item['sector'] for item in STOCKS_DB}
 
 # --- 1. إعداد الصفحة ---
-st.set_page_config(page_title="TASI 3D Galaxy", layout="wide", initial_sidebar_state="collapsed")
+st.set_page_config(page_title="TASI 3D Touch", layout="wide", initial_sidebar_state="collapsed")
 
 st.markdown("""
 <style>
     @import url('https://fonts.googleapis.com/css2?family=Cairo:wght@400;700&display=swap');
     html, body, [class*="css"] { font-family: 'Cairo', sans-serif; }
     
-    /* خلفية سوداء */
     .stApp { background-color: #000000; color: #ffffff; }
     
-    /* زر الإطلاق */
     div.stButton > button {
-        background: radial-gradient(circle, #6200ea 0%, #000000 100%);
-        border: 1px solid #651fff; color: white;
+        background: radial-gradient(circle, #00b0ff 0%, #000000 100%);
+        border: 1px solid #40c4ff; color: white;
         padding: 15px 30px; border-radius: 50px;
         font-weight: bold; font-size: 20px; width: 100%;
-        box-shadow: 0 0 30px rgba(101, 31, 255, 0.5);
+        box-shadow: 0 0 30px rgba(0, 176, 255, 0.5);
     }
     div.stButton > button:hover {
         transform: scale(1.05);
-        box-shadow: 0 0 50px rgba(101, 31, 255, 0.8);
+        box-shadow: 0 0 50px rgba(0, 176, 255, 0.8);
     }
 </style>
 """, unsafe_allow_html=True)
@@ -45,6 +43,9 @@ st.markdown("""
 # --- 2. الإعدادات ---
 with st.sidebar:
     st.header("⚙️ التحكم")
+    # خيار جديد لإظهار/إخفاء الأسماء
+    SHOW_LABELS = st.checkbox("إظهار أسماء الأسهم", value=False, help="قد يسبب ازدحاماً إذا كانت الأسهم كثيرة")
+    st.divider()
     ATR_MULT = st.number_input("ATR Multiplier", 1.0, 3.0, 1.5)
     BOX_LOOKBACK = st.slider("نطاق البحث", 5, 50, 20)
 
@@ -89,24 +90,24 @@ def get_box_status(df, lookback):
     return latest_status
 
 def get_color_hex(status):
-    if status == "Bull": return "#00e676" # أخضر
-    elif status == "Bear": return "#ff1744" # أحمر
-    else: return "#607d8b" # رمادي
+    if status == "Bull": return "#00e676" 
+    elif status == "Bear": return "#ff1744" 
+    else: return "#607d8b" 
 
 # --- 4. المحرك الرئيسي ---
-st.title("🌌 TASI 3D Galaxy (الفضاء الحقيقي)")
+st.title("🌌 TASI 3D Universe (Interactive)")
 
-if 'galaxy_data_v16' not in st.session_state: st.session_state['galaxy_data_v16'] = []
+if 'galaxy_data_v17' not in st.session_state: st.session_state['galaxy_data_v17'] = []
 
-if st.button("🪐 إطلاق المسح ثلاثي الأبعاد"):
-    st.session_state['galaxy_data_v16'] = []
+if st.button("🪐 استكشاف الكون (Build Galaxy)"):
+    st.session_state['galaxy_data_v17'] = []
     progress = st.progress(0); status = st.empty()
     tickers = list(TICKERS.keys())
     
     chunk_size = 30
     for i in range(0, len(tickers), chunk_size):
         chunk = tickers[i:i + chunk_size]
-        status.text(f"بناء المجرة... {i//chunk_size + 1}")
+        status.text(f"معالجة البيانات... {i//chunk_size + 1}")
         try:
             raw_daily = yf.download(chunk, period="2y", interval="1d", group_by='ticker', auto_adjust=False, threads=True, progress=False)
             if not raw_daily.empty:
@@ -126,7 +127,7 @@ if st.button("🪐 إطلاق المسح ثلاثي الأبعاد"):
                                 df_m = df_d.resample('ME').agg({'Open':'first', 'High':'max', 'Low':'min', 'Close':'last', 'Volume':'sum'}).dropna()
                                 s_m = get_box_status(df_m, BOX_LOOKBACK)
                                 
-                                st.session_state['galaxy_data_v16'].append({
+                                st.session_state['galaxy_data_v17'].append({
                                     "Name": name, "Sector": sector,
                                     "Daily": s_d, "Weekly": s_w, "Monthly": s_m,
                                     "Price": df_d['Close'].iloc[-1]
@@ -134,101 +135,111 @@ if st.button("🪐 إطلاق المسح ثلاثي الأبعاد"):
                     except: continue
         except: pass
         progress.progress(min((i + chunk_size) / len(tickers), 1.0))
-    progress.empty(); status.success("المجرة جاهزة!")
+    progress.empty(); status.success("تم!")
 
-# --- 5. الرسم (Plotly 3D Scene) ---
-if st.session_state['galaxy_data_v16']:
-    df = pd.DataFrame(st.session_state['galaxy_data_v16'])
+# --- 5. الرسم (تفعيل الأسماء واللمس) ---
+if st.session_state['galaxy_data_v17']:
+    df = pd.DataFrame(st.session_state['galaxy_data_v17'])
     
-    # 1. إحداثيات الشمس (مركز 0,0,0)
+    # 1. الشمس
     fig = go.Figure(data=[go.Scatter3d(
         x=[0], y=[0], z=[0],
         mode='markers+text',
-        marker=dict(size=50, color='#ffab00', opacity=0.9),
-        text=["TASI"], textfont=dict(size=20, color='white'),
+        marker=dict(size=60, color='#ffab00', opacity=1),
+        text=["<b>TASI</b>"], textfont=dict(size=24, color='white'),
         hoverinfo='none'
     )])
     
-    # 2. توزيع القطاعات والأسهم في الفضاء 3D
     sectors = df['Sector'].unique()
-    sector_radius = 400 # دائرة واسعة للقطاعات
+    sector_radius = 450 
     
     for i, sec in enumerate(sectors):
-        # موقع القطاع (على دائرة مسطحة Z=0)
         sec_angle = (2 * math.pi * i) / len(sectors)
         sec_x = sector_radius * math.cos(sec_angle)
         sec_y = sector_radius * math.sin(sec_angle)
         sec_z = 0
         
-        # رسم كوكب القطاع
+        # الكوكب (القطاع)
         fig.add_trace(go.Scatter3d(
             x=[sec_x], y=[sec_y], z=[sec_z],
             mode='markers+text',
-            marker=dict(size=20, color='#2962ff', opacity=0.8),
+            marker=dict(size=25, color='#2962ff', opacity=0.8),
             text=[sec], textposition="top center",
-            textfont=dict(color='#82b1ff', size=12),
+            textfont=dict(color='#82b1ff', size=14, weight="bold"),
             hoverinfo='none'
         ))
         
-        # توزيع أسهم القطاع (سحابة كروية حول القطاع)
+        # الأسهم
         sec_stocks = df[df['Sector'] == sec]
         
-        xs, ys, zs, colors, sizes, texts = [], [], [], [], [], []
+        xs, ys, zs, colors, sizes, texts, labels = [], [], [], [], [], [], []
         
         for _, stock in sec_stocks.iterrows():
-            # إحداثيات عشوائية داخل كرة حول القطاع
-            # نستخدم Coordinates Spherical لتحقيق التوزيع الكروي
-            r = random.uniform(30, 80) # بعد السهم عن مركز القطاع
+            r = random.uniform(40, 100) 
             theta = random.uniform(0, 2*math.pi)
             phi = random.uniform(0, math.pi)
             
             dx = r * math.sin(phi) * math.cos(theta)
             dy = r * math.sin(phi) * math.sin(theta)
-            dz = r * math.cos(phi) * 0.5 # ضغط الارتفاع قليلاً ليكون شكل "قرص" سميك
+            dz = r * math.cos(phi) * 0.4
             
             xs.append(sec_x + dx)
             ys.append(sec_y + dy)
             zs.append(sec_z + dz)
             
-            # اللون والحجم بناءً على الحالة
-            # الحالة العامة: إذا كان اليومي صاعد -> أخضر، هابط -> أحمر
-            base_color = get_color_hex(stock['Daily'])
-            colors.append(base_color)
+            colors.append(get_color_hex(stock['Daily']))
             
-            # الحجم: يكبر إذا كان هناك توافق (يومي + أسبوعي صاعد)
             size = 5
-            if stock['Daily'] == 'Bull' and stock['Weekly'] == 'Bull': size = 10
+            if stock['Daily'] == 'Bull' and stock['Weekly'] == 'Bull': size = 12
             sizes.append(size)
             
-            tooltip = f"<b>{stock['Name']}</b><br>السعر: {stock['Price']:.2f}<br>D:{stock['Daily']} W:{stock['Weekly']} M:{stock['Monthly']}"
+            # النص عند التحويم (Tooltip)
+            tooltip = f"<b>{stock['Name']}</b><br>{stock['Price']:.2f}<br>D:{stock['Daily']} W:{stock['Weekly']}"
             texts.append(tooltip)
+            # النص الظاهر (Label)
+            labels.append(stock['Name'])
             
-        # رسم أسهم القطاع
+        # تحديد وضع العرض (نص أم بدون نص)
+        mode_setting = 'markers+text' if SHOW_LABELS else 'markers'
+        
         fig.add_trace(go.Scatter3d(
             x=xs, y=ys, z=zs,
-            mode='markers',
-            marker=dict(size=sizes, color=colors, opacity=0.8, line=dict(width=0)),
-            text=texts, hoverinfo='text',
+            mode=mode_setting, # تفعيل النص بناءً على الخيار
+            marker=dict(size=sizes, color=colors, opacity=0.9, line=dict(width=0)),
+            text=labels if SHOW_LABELS else texts, # إذا أظهرنا الأسماء نضع الاسم، وإلا نضع التلميح
+            hovertext=texts, # التلميح يظهر دائماً عند اللمس
+            hoverinfo='text',
+            textfont=dict(size=10, color='rgba(255,255,255,0.8)'), # تنسيق الأسماء
             name=sec
         ))
 
-    # --- إعدادات المشهد 3D ---
+    # --- إعدادات الكاميرا واللمس ---
     fig.update_layout(
         height=900,
         margin=dict(l=0, r=0, b=0, t=0),
         paper_bgcolor='black',
+        showlegend=False,
         scene=dict(
             xaxis=dict(visible=False, showbackground=False),
             yaxis=dict(visible=False, showbackground=False),
             zaxis=dict(visible=False, showbackground=False),
             bgcolor='black',
-            dragmode='orbit' # التدوير هو الأساس
-        ),
-        showlegend=False
+            dragmode='orbit', # أفضل وضع للمس (يدور حول المركز)
+            aspectmode='data'
+        )
     )
     
-    st.plotly_chart(fig, use_container_width=True)
-    st.info("🖱️ **التحكم:** اضغط واسحب للتدوير (Rotate) | استخدم العجلة للتقريب (Zoom).")
+    # تفعيل خيارات التفاعل للجوال
+    config = {
+        'scrollZoom': True,
+        'displayModeBar': False,
+        'responsive': True
+    }
+    
+    st.plotly_chart(fig, use_container_width=True, config=config)
+    
+    if not SHOW_LABELS:
+        st.caption("💡 **تلميح:** فعّل خيار 'إظهار أسماء الأسهم' من القائمة الجانبية لرؤية الشركات بدون لمس.")
 
 else:
     st.write("")
