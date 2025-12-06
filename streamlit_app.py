@@ -22,31 +22,25 @@ except ImportError:
 TICKERS = {item['symbol']: item['name'] for item in STOCKS_DB}
 SECTORS = {item['name']: item['sector'] for item in STOCKS_DB}
 
-# --- 1. إعداد الصفحة والستايل (CSS الاحترافي) ---
-st.set_page_config(page_title="TASI Pro V7", layout="wide", initial_sidebar_state="collapsed")
+# --- 1. إعداد الصفحة والستايل ---
+st.set_page_config(page_title="TASI Pro TV-Style", layout="wide", initial_sidebar_state="collapsed")
 
 st.markdown("""
 <style>
     @import url('https://fonts.googleapis.com/css2?family=Cairo:wght@400;700&display=swap');
     html, body, [class*="css"] { font-family: 'Cairo', sans-serif; }
     
-    /* خلفية داكنة مثل المنصات العالمية */
     .stApp { background-color: #0e1117; color: #e0e0e0; }
-    
-    /* تنسيق الجداول */
     .stDataFrame { border: 1px solid #30333d; }
     div[data-testid="stDataFrame"] div[class*="css"] { background-color: #161b24; color: white; }
     
-    /* تنسيق البطاقات (Metrics) */
     div[data-testid="stMetric"] {
         background: rgba(30, 34, 45, 0.6); backdrop-filter: blur(10px);
         border: 1px solid rgba(255, 255, 255, 0.05); border-radius: 12px;
         padding: 15px; transition: 0.3s;
     }
-    div[data-testid="stMetric"]:hover { transform: translateY(-3px); border-color: #2962ff; }
     div[data-testid="stMetricValue"] { color: #ffffff !important; }
     
-    /* زر التشغيل الرئيسي */
     .stButton > button {
         background: linear-gradient(90deg, #2962ff, #2979ff); color: white; border: none;
         border-radius: 8px; padding: 0.6rem 1.2rem; font-weight: bold; width: 100%;
@@ -54,7 +48,6 @@ st.markdown("""
     }
     .stButton > button:hover { transform: scale(1.02); }
     
-    /* القوائم المنسدلة */
     .stSelectbox > div > div { background-color: #1e222d; color: white; border: 1px solid #434651; }
 </style>
 """, unsafe_allow_html=True)
@@ -64,7 +57,7 @@ selected_tab = option_menu(
     menu_title=None,
     options=["الرئيسية", "الماسح الذكي", "كاشف الانفراجات", "الخريطة", "الشارت"],
     icons=["house", "cpu", "eye", "grid", "graph-up"],
-    default_index=0,
+    default_index=4, # جعلنا الشارت هو الافتراضي للتجربة السريعة
     orientation="horizontal",
     styles={
         "container": {"background-color": "transparent", "padding": "0!important"},
@@ -72,7 +65,7 @@ selected_tab = option_menu(
     }
 )
 
-# --- 3. الإعدادات الجانبية ---
+# --- 3. الإعدادات ---
 with st.sidebar:
     st.header("⚙️ إعدادات المحلل")
     RSI_PERIOD = st.number_input("RSI Period", 14, 30, 24)
@@ -81,8 +74,7 @@ with st.sidebar:
     ATR_MULT = st.number_input("ATR Multiplier", 1.0, 3.0, 1.5)
     BOX_LOOKBACK = st.slider("Box History (Days)", 10, 100, 25)
 
-# --- 4. الدوال الفنية (Technical Functions) ---
-
+# --- 4. الدوال الفنية ---
 def calculate_atr(df, period=14):
     high_low = df['High'] - df['Low']
     high_close = np.abs(df['High'] - df['Close'].shift())
@@ -91,17 +83,14 @@ def calculate_atr(df, period=14):
     return ranges.max(axis=1).ewm(alpha=1/period, min_periods=period, adjust=False).mean()
 
 def check_divergence(df, order=5):
-    # كشف الانفراج الإيجابي (السعر قاع أدنى، RSI قاع أعلى)
     price_lows = argrelextrema(df['Low'].values, np.less_equal, order=order)[0]
     rsi_lows = argrelextrema(df['RSI'].values, np.less_equal, order=order)[0]
     divergence = "لا يوجد"
-    
     if len(price_lows) >= 2 and len(rsi_lows) >= 2:
         p_last = price_lows[-1]; p_prev = price_lows[-2]
-        if (len(df) - p_last) <= 10: # شرط الحداثة
+        if (len(df) - p_last) <= 10:
             price_low1 = df['Low'].iloc[p_prev]; price_low2 = df['Low'].iloc[p_last]
             rsi_low1 = df['RSI'].iloc[p_prev]; rsi_low2 = df['RSI'].iloc[p_last]
-            
             if price_low2 <= price_low1 and rsi_low2 > rsi_low1:
                 divergence = "إيجابي قوي 🔥"
     return divergence
@@ -109,13 +98,11 @@ def check_divergence(df, order=5):
 def check_bullish_box(df, atr_series):
     in_series = False; is_bullish = False; start_open = 0.0; end_close = 0.0; start_idx = 0; found_boxes = []
     prices = df.iloc[-100:].reset_index(); atrs = atr_series.iloc[-100:].values
-    
     for i in range(len(prices)):
         row = prices.iloc[i]; close = row['Close']; open_p = row['Open']
         is_green = close > open_p; is_red = close < open_p
         current_atr = atrs[i]
         if np.isnan(current_atr): continue
-        
         if not in_series:
             if is_green: in_series = True; is_bullish = True; start_open = open_p; start_idx = i
             elif is_red: in_series = True; is_bullish = False; start_open = open_p; start_idx = i
@@ -130,7 +117,7 @@ def check_bullish_box(df, atr_series):
                     if periods_ago <= BOX_LOOKBACK:
                         found_boxes.append({
                             "Box_Top": max(start_open, final_close), "Box_Bottom": min(start_open, final_close),
-                            "Days_Ago": periods_ago, "Start_Index": len(df) - periods_ago - (i - start_idx), "End_Index": len(df) - periods_ago
+                            "Days_Ago": periods_ago
                         })
                 in_series = True; is_bullish = is_green; start_open = open_p; end_close = close; start_idx = i
     return found_boxes
@@ -156,7 +143,6 @@ def process_data(df):
     df['MACD'] = exp1 - exp2
     df['Signal'] = df['MACD'].ewm(span=9, adjust=False).mean()
     
-    # Trend Score (0-2)
     score = ((df['Close'] > df['EMA']).astype(int) + (df['Close'] > df['EMA50']).astype(int))
     df['Trend_Score'] = score
     return df
@@ -171,7 +157,7 @@ def calculate_ai_score(last, box):
     if last['RVOL'] > 1.2: score += 10
     return min(score, 100)
 
-# --- 5. المنطق والتشغيل (Engine) ---
+# --- 5. المنطق (Engine) ---
 if 'data' not in st.session_state: st.session_state['data'] = []
 if 'history' not in st.session_state: st.session_state['history'] = {}
 
@@ -205,13 +191,12 @@ if run_scan:
                         if col in df.columns:
                             df = df.rename(columns={col: 'Close'})
                             df = df.dropna()
-                            if len(df) > 60:
+                            if len(df) > 90:
                                 df = process_data(df)
                                 last = df.iloc[-1]
                                 link = f"https://www.tradingview.com/chart/?symbol=TADAWUL:{sym.replace('.SR','')}"
                                 st.session_state['history'][name] = df
                                 
-                                # Boxes & AI Logic
                                 boxes = check_bullish_box(df, df['ATR'])
                                 ai_score = 0; box_status = "لا يوجد"; box_age = 0
                                 if boxes:
@@ -221,7 +206,6 @@ if run_scan:
                                         ai_score = calculate_ai_score(last, latest)
                                         box_status = "داخل الصندوق" if last['Close'] <= latest['Box_Top'] else "اختراق"
                                 
-                                # Divergence Logic
                                 div_status = check_divergence(df)
 
                                 st.session_state['data'].append({
@@ -238,17 +222,16 @@ if run_scan:
     progress.empty()
     status.success("✅ تم التحديث!")
 
-# --- 6. العرض (Dashboard UI) ---
+# --- 6. العرض (Dashboard) ---
 if st.session_state['data']:
     df = pd.DataFrame(st.session_state['data'])
     link_col = st.column_config.LinkColumn("شارت", display_text="Open TV")
 
-    # --- الرئيسية ---
     if selected_tab == "الرئيسية":
         k1, k2, k3, k4 = st.columns(4)
         k1.metric("عدد الشركات", len(df))
-        k2.metric("انفراجات (Divergence)", len(df[df['Divergence'] != "لا يوجد"]))
-        k3.metric("صناديق ذهبية (AI > 70)", len(df[df['AI_Score'] >= 70]))
+        k2.metric("انفراجات", len(df[df['Divergence'] != "لا يوجد"]))
+        k3.metric("صناديق ذهبية", len(df[df['AI_Score'] >= 70]))
         k4.metric("سيولة عالية", len(df[df['RVOL'] > 2.0]))
         
         st.markdown("### 📊 ملخص السوق")
@@ -257,38 +240,28 @@ if st.session_state['data']:
             .format({"Price": "{:.2f}", "Change": "{:.2f}%", "RSI": "{:.1f}", "RVOL": "{:.1f}x"})
             .background_gradient(cmap='RdYlGn', subset=['Change'])
             .applymap(lambda v: 'color: #00e676; font-weight: bold;' if "إيجابي" in str(v) else '', subset=['Divergence']),
-            column_config={"TV": link_col}, use_container_width=True, height=500
+            column_config={"TV": link_col}, use_container_width=True
         )
 
-    # --- الماسح الذكي ---
     elif selected_tab == "الماسح الذكي":
-        st.markdown("### 📦 الصناديق الذكية (AI Scored)")
-        score_filter = st.slider("الحد الأدنى للتقييم (AI Score)", 0, 100, 60)
+        st.markdown("### 📦 الصناديق الذكية")
+        score_filter = st.slider("تقييم الذكاء", 0, 100, 60)
         filtered = df[(df['AI_Score'] >= score_filter) & (df['Box_Status'] != "لا يوجد")]
-        
-        if not filtered.empty:
-            st.dataframe(
-                filtered[['Name', 'Price', 'AI_Score', 'Box_Status', 'Box_Age', 'TV']].sort_values('AI_Score', ascending=False)
-                .style.format({"Price": "{:.2f}", "AI_Score": "{:.0f}"})
-                .background_gradient(cmap='Greens', subset=['AI_Score']),
-                column_config={"TV": link_col}, use_container_width=True
-            )
-        else: st.info("لا توجد نتائج.")
+        st.dataframe(
+            filtered[['Name', 'Price', 'AI_Score', 'Box_Status', 'Box_Age', 'TV']].sort_values('AI_Score', ascending=False)
+            .style.format({"Price": "{:.2f}", "AI_Score": "{:.0f}"}).background_gradient(cmap='Greens', subset=['AI_Score']),
+            column_config={"TV": link_col}, use_container_width=True
+        )
 
-    # --- كاشف الانفراجات ---
     elif selected_tab == "كاشف الانفراجات":
         st.markdown("### 🦅 فرص الانفراج (RSI Divergence)")
         div_df = df[df['Divergence'] != "لا يوجد"]
-        if not div_df.empty:
-            st.dataframe(
-                div_df[['Name', 'Price', 'RSI', 'Divergence', 'TV']]
-                .style.format({"Price": "{:.2f}", "RSI": "{:.1f}"})
-                .applymap(lambda v: 'background-color: #1b5e20; color: white;', subset=['Divergence']),
-                column_config={"TV": link_col}, use_container_width=True
-            )
-        else: st.info("لم يتم رصد انفراجات مؤكدة اليوم.")
+        st.dataframe(
+            div_df[['Name', 'Price', 'RSI', 'Divergence', 'TV']].style.format({"Price": "{:.2f}", "RSI": "{:.1f}"})
+            .applymap(lambda v: 'background-color: #1b5e20; color: white;', subset=['Divergence']),
+            column_config={"TV": link_col}, use_container_width=True
+        )
 
-    # --- الخريطة ---
     elif selected_tab == "الخريطة":
         fig = px.treemap(
             df, path=[px.Constant("السوق"), 'Sector', 'Name'], values='Price',
@@ -299,7 +272,7 @@ if st.session_state['data']:
         fig.update_layout(margin=dict(t=0, l=0, r=0, b=0), height=600, paper_bgcolor='rgba(0,0,0,0)')
         st.plotly_chart(fig, use_container_width=True)
 
-    # --- الشارت الاحترافي (TradingView Style) ---
+    # --- الشارت الاحترافي (TradingView Logic) ---
     elif selected_tab == "الشارت":
         c_sel, _ = st.columns([1, 3])
         with c_sel:
@@ -308,52 +281,80 @@ if st.session_state['data']:
         if sel_stock:
             hist = st.session_state['history'][sel_stock]
             
-            # تخطيط الشارت (سعر + فوليوم مدمج + RSI منفصل)
+            # 1. إعداد Layout متقدم (Shared Axis)
             fig = make_subplots(
-                rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.0, 
-                row_heights=[0.85, 0.15], specs=[[{"secondary_y": True}], [{"secondary_y": False}]]
+                rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.02, row_heights=[0.8, 0.2],
+                specs=[[{"secondary_y": True}], [{"secondary_y": False}]]
             )
 
-            # 1. الفوليوم (في الخلفية)
-            colors_vol = ['rgba(8, 153, 129, 0.3)' if c >= o else 'rgba(242, 54, 69, 0.3)' for c, o in zip(hist['Close'], hist['Open'])]
-            fig.add_trace(go.Bar(x=hist.index, y=hist['Volume'], marker_color=colors_vol, name='Volume', showlegend=False), row=1, col=1, secondary_y=True)
-
-            # 2. الشموع (تصميم TV)
+            # 2. الشموع (Candles)
             fig.add_trace(go.Candlestick(
                 x=hist.index, open=hist['Open'], high=hist['High'], low=hist['Low'], close=hist['Close'],
-                name='Price', increasing_line_color='#089981', decreasing_line_color='#f23645',
+                name='Price',
+                increasing_line_color='#089981', decreasing_line_color='#f23645',
                 increasing_fillcolor='#089981', decreasing_fillcolor='#f23645'
             ), row=1, col=1, secondary_y=False)
 
-            # 3. المتوسطات
-            fig.add_trace(go.Scatter(x=hist.index, y=hist['EMA'], line=dict(color='#2962ff', width=1.5), name='EMA 20'), row=1, col=1, secondary_y=False)
+            # 3. المتوسطات (EMAs)
+            fig.add_trace(go.Scatter(x=hist.index, y=hist['EMA'], line=dict(color='#2962ff', width=1.5), name=f'EMA {EMA_PERIOD}'), row=1, col=1, secondary_y=False)
             fig.add_trace(go.Scatter(x=hist.index, y=hist['EMA50'], line=dict(color='#ff9800', width=1.5), name='EMA 50'), row=1, col=1, secondary_y=False)
 
-            # 4. الصناديق (مظللة)
+            # 4. الصناديق (Transparent Boxes)
             box_res = check_bullish_box(hist, hist['ATR'])
             if box_res:
                 latest = box_res[-1]
-                midpoint = (latest['Box_Top'] + latest['Box_Bottom']) / 2
-                fig.add_shape(type="rect", x0=hist.index[-latest['Days_Ago']], x1=hist.index[-1], y0=latest['Box_Bottom'], y1=latest['Box_Top'],
-                              line=dict(color="rgba(8, 153, 129, 0.5)", width=1), fillcolor="rgba(8, 153, 129, 0.15)", row=1, col=1, secondary_y=False)
-                fig.add_shape(type="line", x0=hist.index[-latest['Days_Ago']], x1=hist.index[-1], y0=midpoint, y1=midpoint,
+                mid = (latest['Box_Top'] + latest['Box_Bottom']) / 2
+                # رسم المستطيل المظلل
+                fig.add_shape(
+                    type="rect",
+                    x0=hist.index[-latest['Days_Ago']], x1=hist.index[-1],
+                    y0=latest['Box_Bottom'], y1=latest['Box_Top'],
+                    line=dict(color="rgba(8, 153, 129, 0.4)", width=1),
+                    fillcolor="rgba(8, 153, 129, 0.1)",
+                    row=1, col=1, secondary_y=False
+                )
+                # رسم خط المنتصف
+                fig.add_shape(type="line", x0=hist.index[-latest['Days_Ago']], x1=hist.index[-1], y0=mid, y1=mid,
                               line=dict(color="#2962ff", width=1, dash="dot"), row=1, col=1, secondary_y=False)
 
-            # 5. RSI
-            fig.add_trace(go.Scatter(x=hist.index, y=hist['RSI'], line=dict(color='#b2b5be', width=1.5), name='RSI'), row=2, col=1)
-            fig.add_shape(type="rect", x0=hist.index[0], x1=hist.index[-1], y0=30, y1=70, fillcolor="rgba(120, 123, 134, 0.1)", line_width=0, layer="below", row=2, col=1)
-            fig.add_hline(y=70, line_dash="dot", line_color="#f23645", line_width=1, row=2, col=1)
-            fig.add_hline(y=30, line_dash="dot", line_color="#089981", line_width=1, row=2, col=1)
+            # 5. الفوليوم (مدمج في الخلفية)
+            colors_vol = ['rgba(8, 153, 129, 0.5)' if c >= o else 'rgba(242, 54, 69, 0.5)' for c, o in zip(hist['Close'], hist['Open'])]
+            fig.add_trace(go.Bar(x=hist.index, y=hist['Volume'], marker_color=colors_vol, name='Volume', showlegend=False), 
+                          row=1, col=1, secondary_y=True)
 
-            # التنسيق النهائي
+            # 6. مؤشر RSI (في الأسفل)
+            fig.add_trace(go.Scatter(x=hist.index, y=hist['RSI'], line=dict(color='#b2b5be', width=1.5), name='RSI'), row=2, col=1)
+            fig.add_shape(type="rect", x0=hist.index[0], x1=hist.index[-1], y0=30, y1=70, fillcolor="rgba(255, 255, 255, 0.05)", line_width=0, layer="below", row=2, col=1)
+            fig.add_hline(y=70, line_dash="dot", line_color="#f23645", row=2, col=1)
+            fig.add_hline(y=30, line_dash="dot", line_color="#089981", row=2, col=1)
+
+            # --- 7. التنسيق السحري (TradingView Feel) ---
             fig.update_layout(
-                template="plotly_dark", height=650, paper_bgcolor='#131722', plot_bgcolor='#131722',
-                margin=dict(l=5, r=5, t=30, b=5), xaxis_rangeslider_visible=False, showlegend=True,
-                legend=dict(orientation="h", y=1, x=0, bgcolor='rgba(0,0,0,0)'), hovermode='x unified',
-                xaxis=dict(showgrid=False, color='#787b86'), yaxis=dict(showgrid=True, gridcolor='#2a2e39'),
-                yaxis2=dict(showgrid=False, showticklabels=False), yaxis3=dict(showgrid=False, range=[0, 100])
+                template="plotly_dark", height=650, 
+                dragmode='pan', # التفعيل الافتراضي للسحب
+                hovermode='x unified', # المؤشر الموحد
+                xaxis_rangeslider_visible=False,
+                paper_bgcolor='#131722', plot_bgcolor='#131722',
+                margin=dict(l=0, r=50, t=30, b=0), # ترك مساحة لليمين لمحور السعر
+                legend=dict(orientation="h", y=1, x=0, bgcolor='rgba(0,0,0,0)'),
             )
-            st.plotly_chart(fig, use_container_width=True)
+            
+            # إعدادات المحاور
+            fig.update_xaxes(showgrid=False, gridcolor='#2a2e39')
+            # محور السعر (يمين)
+            fig.update_yaxes(side='right', showgrid=True, gridcolor='#2a2e39', zeroline=False, row=1, col=1, secondary_y=False)
+            # محور الفوليوم (مخفي الأرقام، مصغر)
+            fig.update_yaxes(showticklabels=False, range=[0, hist['Volume'].max()*4], row=1, col=1, secondary_y=True)
+            # محور RSI
+            fig.update_yaxes(side='right', showgrid=False, range=[0, 100], row=2, col=1)
+
+            # تفعيل إعدادات الكونفيق (Config) المهمة جداً
+            st.plotly_chart(fig, use_container_width=True, config={
+                'scrollZoom': True, # التكبير بالعجلة
+                'displayModeBar': True,
+                'modeBarButtonsToRemove': ['zoomIn2d', 'zoomOut2d', 'autoScale2d'],
+                'displaylogo': False
+            })
 
 else:
-    st.info("👋 V7.1 Ready. اضغط زر التحديث.")
+    st.info("👋 جاهز! اضغط زر التحديث.")
