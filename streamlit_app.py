@@ -3,6 +3,7 @@ import yfinance as yf
 import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
+import pydeck as pdk # المكتبة الجديدة 🌟
 import random
 import math
 
@@ -17,30 +18,20 @@ TICKERS = {item['symbol']: item['name'] for item in STOCKS_DB}
 SECTORS_MAP = {item['name']: item['sector'] for item in STOCKS_DB}
 
 # --- 1. إعداد الصفحة ---
-st.set_page_config(page_title="TASI Galaxy Pro", layout="wide", initial_sidebar_state="collapsed")
+st.set_page_config(page_title="TASI Galaxy 3D (PyDeck)", layout="wide", initial_sidebar_state="collapsed")
 
 st.markdown("""
 <style>
     @import url('https://fonts.googleapis.com/css2?family=Cairo:wght@400;700&display=swap');
     html, body, [class*="css"] { font-family: 'Cairo', sans-serif; }
-    
-    /* خلفية سوداء تماماً لتباين أفضل */
     .stApp { background-color: #000000; color: #ffffff; }
-    
-    /* زر الإطلاق بتأثير نيون */
     div.stButton > button {
-        background: radial-gradient(circle, #2962ff 0%, #000000 100%);
-        border: 1px solid #2962ff; color: white;
-        padding: 15px 40px; border-radius: 50px;
-        font-weight: bold; font-size: 22px; width: 100%;
-        box-shadow: 0 0 30px rgba(41, 98, 255, 0.4);
-        transition: all 0.3s;
+        background: linear-gradient(45deg, #7c4dff, #2962ff); color: white; border: none;
+        padding: 15px 40px; border-radius: 50px; font-weight: bold; font-size: 22px; width: 100%;
+        box-shadow: 0 0 30px rgba(124, 77, 255, 0.5);
     }
-    div.stButton > button:hover {
-        transform: scale(1.02);
-        box-shadow: 0 0 50px rgba(41, 98, 255, 0.8);
-        border-color: white;
-    }
+    /* إخفاء عناصر التحكم الافتراضية لـ PyDeck لجعلها أنظف */
+    .deckgl-control { display: none !important; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -63,15 +54,12 @@ def get_box_status(df, lookback):
     df['ATR'] = calculate_atr(df)
     prices = df.iloc[-lookback:].reset_index(); atrs = df['ATR'].iloc[-lookback:].values
     latest_status = "---"
-    
     in_series = False; mode = None; start_open = 0.0; end_close = 0.0
-    
     for i in range(len(prices)):
         row = prices.iloc[i]; close = row['Close']; open_p = row['Open']
         is_green = close > open_p; is_red = close < open_p
         current_atr = atrs[i]
         if np.isnan(current_atr): continue
-        
         if not in_series:
             if is_green: in_series = True; mode = 'bull'; start_open = open_p
             elif is_red: in_series = True; mode = 'bear'; start_open = open_p
@@ -91,25 +79,26 @@ def get_box_status(df, lookback):
                 in_series = True; mode = 'bull' if is_green else 'bear'; start_open = open_p; end_close = close
     return latest_status
 
-def get_color(status):
-    if status == "Bull": return "#00e676" # أخضر ساطع
-    elif status == "Bear": return "#d50000" # أحمر دموي
-    else: return "#37474f" # رمادي كحلي
+# دالة تحويل الحالة إلى لون RGB لـ PyDeck
+def get_color_rgb(status):
+    if status == "Bull": return [0, 230, 118, 255] # أخضر نيون
+    elif status == "Bear": return [255, 23, 68, 255] # أحمر نيون
+    else: return [55, 71, 79, 150] # رمادي شفاف
 
 # --- 4. المحرك الرئيسي ---
-st.title("🌌 TASI Galaxy (Touch & Zoom)")
+st.title("🌌 TASI Galaxy 3D (Powered by PyDeck)")
 
-if 'galaxy_data' not in st.session_state: st.session_state['galaxy_data'] = []
+if 'galaxy_data_3d' not in st.session_state: st.session_state['galaxy_data_3d'] = []
 
-if st.button("🪐 استكشاف الكون (Scan Universe)"):
-    st.session_state['galaxy_data'] = []
+if st.button("🚀 إطلاق المحرك ثلاثي الأبعاد (Scan 3D)"):
+    st.session_state['galaxy_data_3d'] = []
     progress = st.progress(0); status = st.empty()
     tickers = list(TICKERS.keys())
     
     chunk_size = 30
     for i in range(0, len(tickers), chunk_size):
         chunk = tickers[i:i + chunk_size]
-        status.text(f"جاري بناء المجرات... {i//chunk_size + 1}")
+        status.text(f"جاري بناء النموذج ثلاثي الأبعاد... {i//chunk_size + 1}")
         try:
             raw_daily = yf.download(chunk, period="2y", interval="1d", group_by='ticker', auto_adjust=False, threads=True, progress=False)
             if not raw_daily.empty:
@@ -129,7 +118,7 @@ if st.button("🪐 استكشاف الكون (Scan Universe)"):
                                 df_m = df_d.resample('ME').agg({'Open':'first', 'High':'max', 'Low':'min', 'Close':'last', 'Volume':'sum'}).dropna()
                                 s_m = get_box_status(df_m, BOX_LOOKBACK)
                                 
-                                st.session_state['galaxy_data'].append({
+                                st.session_state['galaxy_data_3d'].append({
                                     "Name": name, "Sector": sector,
                                     "Daily": s_d, "Weekly": s_w, "Monthly": s_m,
                                     "Price": df_d['Close'].iloc[-1]
@@ -137,153 +126,138 @@ if st.button("🪐 استكشاف الكون (Scan Universe)"):
                     except: continue
         except: pass
         progress.progress(min((i + chunk_size) / len(tickers), 1.0))
-    progress.empty(); status.success("المجرة جاهزة للاستكشاف!")
+    progress.empty(); status.success("المجرة 3D جاهزة!")
 
-# --- 5. الرسم (تحسينات اللمس والعرض) ---
-if st.session_state['galaxy_data']:
-    df = pd.DataFrame(st.session_state['galaxy_data'])
-    fig = go.Figure()
+# --- 5. رسم المجرة باستخدام PyDeck 🌟 ---
+if st.session_state['galaxy_data_3d']:
+    df_res = pd.DataFrame(st.session_state['galaxy_data_3d'])
     
-    # 0. خلفية النجوم (طبقتين لعمق أكبر)
-    # نجوم بعيدة (صغيرة وكثيرة)
-    fig.add_trace(go.Scatter(
-        x=[random.uniform(-180, 180) for _ in range(500)],
-        y=[random.uniform(-180, 180) for _ in range(500)],
-        mode='markers', marker=dict(size=1, color='white', opacity=0.3), hoverinfo='skip'
-    ))
-    # نجوم قريبة (أكبر وألمع)
-    fig.add_trace(go.Scatter(
-        x=[random.uniform(-180, 180) for _ in range(100)],
-        y=[random.uniform(-180, 180) for _ in range(100)],
-        mode='markers', marker=dict(size=2.5, color='#e0f7fa', opacity=0.6), hoverinfo='skip'
+    # --- تجهيز بيانات PyDeck ---
+    layers = []
+    
+    # 1. الشمس (TASI) - مركز ثابت
+    sun_data = [{"name": "TASI (المؤشر العام)", "pos": [0, 0, 0], "color": [255, 171, 0, 255], "radius": 150}]
+    layers.append(pdk.Layer(
+        "ScatterplotLayer",
+        data=sun_data,
+        get_position="pos",
+        get_color="color",
+        get_radius="radius",
+        pickable=True,
+        opacity=0.9,
+        stroked=True, filled=True, radius_scale=1, line_width_min_pixels=5, get_line_color=[255, 214, 0]
     ))
 
-    # 1. الشمس (TASI) مع توهج
-    # التوهج
-    fig.add_trace(go.Scatter(
-        x=[0], y=[0], mode='markers',
-        marker=dict(size=140, color='#ffab00', opacity=0.2), hoverinfo='skip'
-    ))
-    # الجسم الأساسي
-    fig.add_trace(go.Scatter(
-        x=[0], y=[0], mode='markers+text',
-        marker=dict(size=80, color='#ffab00', line=dict(color='#ffd600', width=4)),
-        text=["<b>TASI</b>"], textposition="middle center",
-        textfont=dict(color='black', size=20, family="Cairo", weight="bold"),
-        hoverinfo='skip'
-    ))
-    
-    sectors = df['Sector'].unique()
-    sector_base_radius = 80 # نصف قطر المدار الأول
-    
+    # 2. القطاعات (كواكب تدور حول الشمس)
+    sectors = df_res['Sector'].unique()
+    sector_radius_base = 400 # توسيع المدار
+    sector_positions = {}
+
+    sector_plot_data = []
     for i, sec in enumerate(sectors):
-        # توزيع القطاعات في مدارات مختلفة لتقليل الازدحام
-        # كل قطاعين يأخذان مساراً أبعد قليلاً
-        current_orbit_radius = sector_base_radius + (i % 2) * 30 
+        angle = (2 * math.pi * i) / len(sectors)
+        # إضافة تنوع بسيط في الارتفاع (Z) لجعل المدارات متموجة
+        z_offset = 50 * math.sin(angle * 3) 
+        sx = sector_radius_base * math.cos(angle)
+        sy = sector_radius_base * math.sin(angle)
+        sz = z_offset
+        sector_positions[sec] = (sx, sy, sz)
         
-        sec_angle = (2 * math.pi * i) / len(sectors)
-        sec_x = current_orbit_radius * math.cos(sec_angle)
-        sec_y = current_orbit_radius * math.sin(sec_angle)
-        
-        # رسم خط المدار (خافت جداً) لربط القطاع بالشمس
-        fig.add_trace(go.Scatter(
-            x=[0, sec_x], y=[0, sec_y], mode='lines',
-            line=dict(color='rgba(255, 255, 255, 0.05)', width=1),
-            hoverinfo='skip'
-        ))
-        
-        # كوكب القطاع
-        fig.add_trace(go.Scatter(
-            x=[sec_x], y=[sec_y], mode='markers+text',
-            marker=dict(size=40, color='#2962ff', line=dict(color='white', width=1), opacity=0.9),
-            text=[sec], textposition="bottom center",
-            textfont=dict(color='#bbdefb', size=14, weight="bold"),
-            hoverinfo='none'
-        ))
-        
-        # الأسهم
-        sec_stocks = df[df['Sector'] == sec]
-        num_stocks = len(sec_stocks)
-        
-        stk_xs, stk_ys, stk_cols, stk_txts = [], [], [], []
-        halo_w_x, halo_w_y, halo_w_c = [], [], []
-        halo_m_x, halo_m_y, halo_m_c = [], [], []
-        
-        for j, (_, stock) in enumerate(sec_stocks.iterrows()):
-            stock_angle = (2 * math.pi * j) / num_stocks
-            # مسافة انتشار الأسهم حول القطاع (عشوائية قليلاً لتبدو طبيعية)
-            dist = random.uniform(15, 28) 
-            
-            sx = sec_x + dist * math.cos(stock_angle)
-            sy = sec_y + dist * math.sin(stock_angle)
-            
-            # نص المعلومات (HTML formatted)
-            tooltip = f"""
-            <span style='font-size:18px; font-weight:bold; color:white'>{stock['Name']}</span><br>
-            <span style='color:#b0bec5'>السعر: {stock['Price']:.2f}</span><br>
-            <span style='color:{get_color(stock['Daily'])}'>● يومي</span>
-            <span style='color:{get_color(stock['Weekly'])}'>● أسبوعي</span>
-            <span style='color:{get_color(stock['Monthly'])}'>● شهري</span>
-            """
-            
-            stk_xs.append(sx); stk_ys.append(sy)
-            stk_cols.append(get_color(stock['Daily']))
-            stk_txts.append(tooltip)
-            
-            # بيانات الهالات
-            halo_w_x.append(sx); halo_w_y.append(sy); halo_w_c.append(get_color(stock['Weekly']))
-            halo_m_x.append(sx); halo_m_y.append(sy); halo_m_c.append(get_color(stock['Monthly']))
+        sector_plot_data.append({
+            "name": sec, "pos": [sx, sy, sz], "color": [41, 98, 255, 200], "radius": 60
+        })
 
-        # رسم الهالات (شهري - أسبوعي)
-        fig.add_trace(go.Scatter(
-            x=halo_m_x, y=halo_m_y, mode='markers',
-            marker=dict(size=30, color=halo_m_c, opacity=0.2), hoverinfo='skip'
-        ))
-        fig.add_trace(go.Scatter(
-            x=halo_w_x, y=halo_w_y, mode='markers',
-            marker=dict(size=20, color=halo_w_c, opacity=0.5), hoverinfo='skip'
-        ))
-        
-        # رسم الأنوية (اليومي - المتفاعلة)
-        fig.add_trace(go.Scatter(
-            x=stk_xs, y=stk_ys, mode='markers',
-            marker=dict(size=12, color=stk_cols, line=dict(color='white', width=1)),
-            text=stk_txts, hoverinfo='text',
-            hoverlabel=dict(bgcolor="#1c1c1c", bordercolor="white", font=dict(color="white"))
-        ))
+    layers.append(pdk.Layer(
+        "ScatterplotLayer",
+        data=sector_plot_data,
+        get_position="pos", get_color="color", get_radius="radius",
+        pickable=True, opacity=0.8, stroked=True, line_width_min_pixels=2, get_line_color=[130, 177, 255]
+    ))
 
-    # --- إعدادات اللمس والتفاعل (The Magic Config) ---
-    fig.update_layout(
-        template="plotly_dark",
-        height=900, width=900, # مربع ليكون متناسقاً
-        paper_bgcolor='#000000', plot_bgcolor='#000000',
-        showlegend=False,
-        margin=dict(l=0, r=0, t=0, b=0),
-        xaxis=dict(visible=False, fixedrange=False), 
-        yaxis=dict(visible=False, fixedrange=False),
+    # 3. الأسهم (أعمدة مكدسة تدور حول القطاعات)
+    stock_plot_data = []
+    
+    # ارتفاع الطبقات في العمود
+    Z_DAILY = 0
+    Z_WEEKLY = 25
+    Z_MONTHLY = 50
+    STOCK_RADIUS = 12
+
+    for i, row in df_res.iterrows():
+        sec_pos = sector_positions[row['Sector']]
         
-        # إعدادات التفاعل المحسنة
-        hovermode='closest', # يلتقط أقرب عنصر
-        hoverdistance=50,    # مسافة التقاط معقولة
-        dragmode='pan'       # الوضع الافتراضي هو التحريك (Pan)
+        # توزيع عشوائي ثلاثي الأبعاد حول القطاع (سحابة كروية)
+        # نستخدم إحداثيات كروية لتوزيع طبيعي
+        phi = random.uniform(0, 2 * math.pi)
+        theta = random.uniform(0, math.pi)
+        dist = random.uniform(80, 180) # مسافة الانتشار عن القطاع
+        
+        dx = dist * math.sin(theta) * math.cos(phi)
+        dy = dist * math.sin(theta) * math.sin(phi)
+        dz = dist * math.cos(theta) * 0.5 # ضغط الانتشار العمودي قليلاً
+
+        base_x = sec_pos[0] + dx
+        base_y = sec_pos[1] + dy
+        base_z = sec_pos[2] + dz
+        
+        tooltip_text = f"{row['Name']} \n السعر: {row['Price']:.2f} \n يومي: {row['Daily']} \n أسبوعي: {row['Weekly']} \n شهري: {row['Monthly']}"
+
+        # الطبقة 1: اليومي (القاعدة)
+        stock_plot_data.append({
+            "name": row['Name'], "pos": [base_x, base_y, base_z + Z_DAILY],
+            "color": get_color_rgb(row['Daily']), "radius": STOCK_RADIUS, "info": tooltip_text, "frame": "يومي"
+        })
+        # الطبقة 2: الأسبوعي (الوسط)
+        stock_plot_data.append({
+            "name": row['Name'], "pos": [base_x, base_y, base_z + Z_WEEKLY],
+            "color": get_color_rgb(row['Weekly']), "radius": STOCK_RADIUS * 0.9, "info": tooltip_text, "frame": "أسبوعي"
+        })
+        # الطبقة 3: الشهري (القمة)
+        stock_plot_data.append({
+            "name": row['Name'], "pos": [base_x, base_y, base_z + Z_MONTHLY],
+            "color": get_color_rgb(row['Monthly']), "radius": STOCK_RADIUS * 0.8, "info": tooltip_text, "frame": "شهري"
+        })
+
+    # إضافة طبقة الأسهم
+    layers.append(pdk.Layer(
+        "ScatterplotLayer",
+        data=stock_plot_data,
+        get_position="pos", get_color="color", get_radius="radius",
+        pickable=True, # مهم لظهور المعلومات عند التحويم
+        opacity=1.0,
+        stroked=True, line_width_min_pixels=1, get_line_color=[255,255,255, 50]
+    ))
+
+    # --- إعدادات الكاميرا والإضاءة (Cinematic View) ---
+    view_state = pdk.ViewState(
+        latitude=0, longitude=0, # مركز العالم
+        zoom=0.5, # زوم بعيد لرؤية المجرة كاملة
+        pitch=45, # زاوية نظر مائلة (سينمائية)
+        bearing=0 # دوران الكاميرا
     )
     
-    # تفعيل خيارات التكبير باللمس (Pinch) والعجلة
-    config = {
-        'scrollZoom': True,       # تفعيل عجلة الماوس
-        'displayModeBar': True,   # إظهار شريط الأدوات (مهم للجوال للتبديل بين Pan و Zoom)
-        'doubleClick': 'reset',   # نقرتين لإعادة الضبط
-        'modeBarButtonsToRemove': ['lasso2d', 'select2d'], # إزالة أدوات غير مفيدة
-        'responsive': True        # استجابة لحجم الشاشة
-    }
+    # إعدادات الإضاءة والجو العام
+    r = pdk.Deck(
+        layers=layers,
+        initial_view_state=view_state,
+        map_style=None, # خلفية سوداء تماماً بدون خريطة أرضية
+        tooltip={"html": "<b>{info}</b>", "style": {"backgroundColor": "#1c1c1c", "color": "white", "fontSize": "14px", "borderRadius": "5px"}}
+    )
     
-    st.plotly_chart(fig, use_container_width=True, config=config)
+    # عرض الشارت في Streamlit
+    st.pydeck_chart(r, use_container_width=True)
+    
     st.markdown("""
-    <div style="text-align: center; color: gray; padding: 10px;">
-    🤏 <b>للجوال:</b> استخدم إصبعين للتقريب (Pinch) وإصبع واحد للتحريك.<br>
-    🖱️ <b>للكمبيوتر:</b> استخدم عجلة الماوس للتقريب.
+    <div style="text-align: center; color: #b0bec5; padding: 20px;">
+    🖱️ <b>التحكم بالماوس (PC):</b><br>
+    • <b>الزر الأيسر + السحب:</b> للتدوير (Rotate).<br>
+    • <b>الزر الأيمن + السحب:</b> للتحريك الجانبي (Pan).<br>
+    • <b>العجلة:</b> للتقريب والتبعيد (Zoom).<br><br>
+    👆 <b>التحكم باللمس (Mobile):</b><br>
+    • <b>إصبع واحد:</b> للتدوير.<br>
+    • <b>إصبعين:</b> للتحريك الجانبي والتقريب (Pinch).
     </div>
     """, unsafe_allow_html=True)
 
 else:
-    st.write("")
+    st.info("🌌 اضغط الزر البنفسجي لبناء المجرة ثلاثية الأبعاد.")
