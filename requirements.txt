@@ -5,3 +5,4 @@ numpy
 plotly
 jinja2
 matplotlib
+streamlit-option-menu
