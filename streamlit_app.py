@@ -9,7 +9,7 @@ import time
 
 # --- استيراد القائمة من الملف الخارجي ---
 try:
-    from saudi_tickers import STOCKS_DB
+    from data/saudi_tickers import STOCKS_DB
 except ImportError:
     st.error("عفواً، لم يتم العثور على ملف saudi_tickers.py. تأكد من وجوده في نفس المجلد.")
     st.stop()
