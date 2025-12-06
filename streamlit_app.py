@@ -7,7 +7,7 @@ from plotly.subplots import make_subplots
 import time
 
 # --- 1. إعداد الصفحة والوضع الليلي ---
-st.set_page_config(page_title="Saudi Pro Dark", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="Saudi Pro All Market", layout="wide", initial_sidebar_state="expanded")
 
 st.markdown("""
 <style>
@@ -30,18 +30,71 @@ with st.sidebar:
     st.title("⚙️ الإعدادات")
     RSI_PERIOD = st.number_input("فترة RSI", value=24)
     EMA_PERIOD = st.number_input("فترة EMA", value=8)
-    st.info("اضغط زر التشغيل لبدء التحليل.")
+    st.info("اضغط زر التشغيل لبدء مسح السوق بالكامل.")
 
+# --- 3. القائمة الشاملة للسوق السعودي ---
 TICKERS = {
-    "1180.SR": "الأهلي", "1120.SR": "الراجحي", "1010.SR": "الرياض", "1150.SR": "الإنماء", 
-    "2222.SR": "أرامكو", "2010.SR": "سابك", "1211.SR": "معادن", "2020.SR": "سابك للمغذيات", "4030.SR": "البحري",
-    "7010.SR": "STC", "7020.SR": "موبايلي", "7202.SR": "علم",
-    "4190.SR": "جرير", "4200.SR": "الدريس", "4002.SR": "المواساة", "2280.SR": "المراعي",
-    "^TASI.SR": "المؤشر العام"
+    # === الطاقة ===
+    "2222.SR": "أرامكو", "2030.SR": "المصافي", "4200.SR": "الدريس", "5110.SR": "الكهرباء", 
+    "2080.SR": "الغاز", "4030.SR": "البحري", "2380.SR": "رابغ", "2381.SR": "الحفر العربية", "2382.SR": "أديس",
+    
+    # === المواد الأساسية (بتروكيماويات) ===
+    "2010.SR": "سابك", "1211.SR": "معادن", "2020.SR": "سابك للمغذيات", "2310.SR": "سبكيم", 
+    "2060.SR": "التصنيع", "2290.SR": "ينساب", "2001.SR": "كيمانول", "2170.SR": "اللجين", 
+    "2330.SR": "المتقدمة", "2350.SR": "كيان", "2090.SR": "جبسكو", "2150.SR": "زجاج", 
+    "2180.SR": "فيبكو", "2200.SR": "أنابيب", "2210.SR": "نما", "2230.SR": "الكيميائية", 
+    "2250.SR": "المجموعة", "2300.SR": "صناعة الورق", "2320.SR": "البابطين", "2340.SR": "العبداللطيف",
+    "2370.SR": "مسك", "1301.SR": "أسلاك", "1320.SR": "أنابيب الشرق", "1321.SR": "أنابيب السعودية",
+    
+    # === الأسمنتات ===
+    "3030.SR": "أسمنت السعودية", "3040.SR": "أسمنت القصيم", "3050.SR": "أسمنت الجنوب", 
+    "3060.SR": "أسمنت ينبع", "3010.SR": "أسمنت العربية", "3020.SR": "أسمنت اليمامة", 
+    "3080.SR": "أسمنت الشرقية", "3090.SR": "أسمنت تبوك", "3001.SR": "أسمنت حائل", 
+    "3002.SR": "أسمنت نجران", "3003.SR": "أسمنت المدينة", "3004.SR": "أسمنت الشمالية", 
+    "3005.SR": "أسمنت أم القرى", "3008.SR": "الكثيري",
+    
+    # === البنوك ===
+    "1120.SR": "الراجحي", "1180.SR": "الأهلي", "1010.SR": "الرياض", "1150.SR": "الإنماء", 
+    "1060.SR": "الأول", "1140.SR": "البلاد", "1030.SR": "الاستثمار", "1020.SR": "الجزيرة", 
+    "1080.SR": "العربي", "1050.SR": "الفرنسي", "1111.SR": "تداول", "1183.SR": "سهل", 
+    "4081.SR": "النايفات", "1182.SR": "أملاك",
+    
+    # === الاتصالات والتقنية ===
+    "7010.SR": "STC", "7020.SR": "موبايلي", "7030.SR": "زين", "7040.SR": "عذيب", 
+    "7200.SR": "سلوشنز", "7201.SR": "بحر العرب", "7202.SR": "علم", "7203.SR": "توبي",
+    
+    # === التجزئة والأغذية ===
+    "4190.SR": "جرير", "4001.SR": "العثيم", "4003.SR": "إكسترا", "4164.SR": "النهدي", 
+    "2280.SR": "المراعي", "2270.SR": "سدافكو", "6002.SR": "هرفي", "6004.SR": "كاتريون (التموين)", 
+    "6010.SR": "نادك", "6020.SR": "جاكو", "6040.SR": "تبوك الزراعية", "6050.SR": "الأسماك", 
+    "6060.SR": "الشرقية الزراعية", "6070.SR": "الجوف", "6090.SR": "جازادكو", "1810.SR": "سيرا", 
+    "1830.SR": "وقت اللياقة", "4161.SR": "بن داود", "4162.SR": "المنجم", "4163.SR": "الدواء",
+    
+    # === الصحة والتأمين ===
+    "4002.SR": "المواساة", "4004.SR": "دلة", "4007.SR": "الحمادي", "4009.SR": "الألماني", 
+    "4013.SR": "سليمان الحبيب", "8010.SR": "التعاونية", "8210.SR": "بوبا", "8230.SR": "الراجحي تكافل", 
+    "8012.SR": "جزيرة تكافل", "8020.SR": "ملاذ", "8030.SR": "ميدغلف", "8040.SR": "أليانز", 
+    "8050.SR": "سلامة", "8060.SR": "ولاء", "8070.SR": "الدرع العربي", "8100.SR": "سايكو",
+    
+    # === العقار والريت ===
+    "4300.SR": "دار الأركان", "4250.SR": "جبل عمر", "4220.SR": "إعمار", "4321.SR": "سينومي سنترز", 
+    "4230.SR": "البحر الأحمر", "4090.SR": "طيبة", "4100.SR": "مكة", "4150.SR": "التعمير",
+    "4310.SR": "مدينة المعرفة", "4330.SR": "الرياض ريت", "4340.SR": "الراجحي ريت", 
+    "4342.SR": "جدوى ريت السعودية", "4344.SR": "سدكو كابيتال ريت",
+    
+    # === السلع الرأسمالية والخدمات ===
+    "1212.SR": "أسترا", "1214.SR": "شاكر", "1302.SR": "بوان", "1303.SR": "الصناعات الكهربائية", 
+    "1831.SR": "مهارة", "2040.SR": "الخزف", "2110.SR": "الكابلات", "4020.SR": "العقارية", 
+    "4040.SR": "الجماعي", "4050.SR": "ساسكو", "4260.SR": "بدجت", "4261.SR": "ذيب", 
+    "4031.SR": "الخدمات الأرضية", "4263.SR": "سال",
+    
+    # === المؤشر العام ===
+    "^TASI.SR": "المؤشر العام (TASI)"
 }
 
-# --- 3. الدوال ---
+# --- 4. الدوال ---
 def calculate_indicators(df):
+    # RSI (RMA Method)
     delta = df['Close'].diff()
     gain = delta.clip(lower=0)
     loss = -delta.clip(upper=0)
@@ -49,22 +102,27 @@ def calculate_indicators(df):
     avg_loss = loss.ewm(alpha=1/RSI_PERIOD, min_periods=RSI_PERIOD, adjust=False).mean()
     rs = avg_gain / avg_loss
     df['RSI'] = 100 - (100 / (1 + rs))
+    
+    # EMA & MACD
     df['EMA'] = df['Close'].ewm(span=EMA_PERIOD, adjust=False).mean()
     exp1 = df['Close'].ewm(span=12, adjust=False).mean()
     exp2 = df['Close'].ewm(span=26, adjust=False).mean()
     df['MACD'] = exp1 - exp2
     df['Signal_Line'] = df['MACD'].ewm(span=9, adjust=False).mean()
+    
+    # التغير (مفتاح إنجليزي لتجنب الأخطاء)
     df['Change'] = df['Close'].pct_change() * 100
     return df
 
-# --- 4. المنطق ---
-st.title("📊 محلل السوق السعودي (Stable)")
+# --- 5. المنطق والتشغيل ---
+st.title("📊 محلل السوق السعودي (شامل)")
 
 if 'data' not in st.session_state: st.session_state['data'] = []
 if 'signals' not in st.session_state: st.session_state['signals'] = []
 if 'history' not in st.session_state: st.session_state['history'] = {}
 
-if st.button("🚀 تحديث البيانات (Scan Market)"):
+# زر التحديث
+if st.button("🚀 تحديث البيانات (Scan Full Market)"):
     st.session_state['data'] = []
     st.session_state['signals'] = []
     st.session_state['history'] = {}
@@ -72,53 +130,67 @@ if st.button("🚀 تحديث البيانات (Scan Market)"):
     progress_bar = st.progress(0)
     status_text = st.empty()
     tickers_list = list(TICKERS.keys())
+    total_tickers = len(tickers_list)
     
-    try:
-        status_text.text("جاري الاتصال بقاعدة البيانات...")
-        raw_data = yf.download(tickers_list, period="6mo", interval="1d", group_by='ticker', auto_adjust=False, threads=True, progress=False)
+    # نظام الدفعات (Chunks) لتجنب انقطاع الاتصال
+    chunk_size = 50
+    for i in range(0, total_tickers, chunk_size):
+        chunk = tickers_list[i:i + chunk_size]
+        status_text.text(f"جاري تحميل الدفعة {i//chunk_size + 1}...")
         
-        if not raw_data.empty:
-            for i, symbol in enumerate(tickers_list):
-                try:
-                    name = TICKERS[symbol]
-                    try: df = raw_data[symbol].copy()
-                    except: continue
+        try:
+            # تحميل الدفعة
+            raw_data = yf.download(chunk, period="6mo", interval="1d", group_by='ticker', auto_adjust=False, threads=True, progress=False)
+            
+            if not raw_data.empty:
+                for symbol in chunk:
+                    try:
+                        name = TICKERS[symbol]
+                        try: df = raw_data[symbol].copy()
+                        except: continue
 
-                    col = 'Close' if 'Close' in df.columns else 'Adj Close'
-                    if col in df.columns:
-                        df = df.rename(columns={col: 'Close'})
-                        df = df.dropna()
-                        if len(df) > 50:
-                            df = calculate_indicators(df)
-                            last_row = df.iloc[-1]
-                            st.session_state['history'][name] = df
-                            
-                            st.session_state['data'].append({
-                                "Name": name, "Symbol": symbol, "Price": last_row['Close'],
-                                "Change": last_row['Change'], "RSI": last_row['RSI'],
-                                "MACD": last_row['MACD'], "Signal_Line": last_row['Signal_Line']
-                            })
-                            
-                            tail = df.tail(4)
-                            if len(tail) == 4:
-                                rsi_break = False
-                                ema_break = False
-                                for idx in range(1, 4):
-                                    if tail['RSI'].iloc[idx-1] <= 30 and tail['RSI'].iloc[idx] > 30: rsi_break = True
-                                    if tail['Close'].iloc[idx-1] <= tail['EMA'].iloc[idx-1] and tail['Close'].iloc[idx] > tail['EMA'].iloc[idx]: ema_break = True
+                        col = 'Close' if 'Close' in df.columns else 'Adj Close'
+                        if col in df.columns:
+                            df = df.rename(columns={col: 'Close'})
+                            df = df.dropna()
+                            if len(df) > 50:
+                                df = calculate_indicators(df)
+                                last_row = df.iloc[-1]
                                 
-                                if rsi_break and ema_break:
-                                    macd_status = "✅" if last_row['MACD'] > last_row['Signal_Line'] else "⚠️"
-                                    st.session_state['signals'].append({
-                                        "الاسم": name, "السعر": last_row['Close'], "RSI": last_row['RSI'], "MACD": macd_status
-                                    })
-                except: continue
-                progress_bar.progress((i + 1) / len(tickers_list))
-    except Exception as e: st.error(f"خطأ: {e}")
+                                # حفظ البيانات
+                                st.session_state['history'][name] = df
+                                st.session_state['data'].append({
+                                    "Name": name, "Symbol": symbol, "Price": last_row['Close'],
+                                    "Change": last_row['Change'], "RSI": last_row['RSI'],
+                                    "MACD": last_row['MACD'], "Signal_Line": last_row['Signal_Line']
+                                })
+                                
+                                # منطق الإشارات (آخر 3 أيام)
+                                tail = df.tail(4)
+                                if len(tail) == 4:
+                                    rsi_break = False
+                                    ema_break = False
+                                    for idx in range(1, 4):
+                                        if tail['RSI'].iloc[idx-1] <= 30 and tail['RSI'].iloc[idx] > 30: rsi_break = True
+                                        if tail['Close'].iloc[idx-1] <= tail['EMA'].iloc[idx-1] and tail['Close'].iloc[idx] > tail['EMA'].iloc[idx]: ema_break = True
+                                    
+                                    if rsi_break and ema_break:
+                                        macd_status = "✅" if last_row['MACD'] > last_row['Signal_Line'] else "⚠️"
+                                        st.session_state['signals'].append({
+                                            "الاسم": name, "السعر": last_row['Close'], "RSI": last_row['RSI'], "MACD": macd_status
+                                        })
+                    except: continue
+        except Exception as e:
+            pass
+        
+        # تحديث الشريط
+        progress_bar.progress(min((i + chunk_size) / total_tickers, 1.0))
+        time.sleep(0.5) # استراحة قصيرة لتجنب الحظر
+        
     progress_bar.empty()
-    status_text.empty()
+    status_text.success(f"تم الانتهاء! تم تحليل {len(st.session_state['data'])} شركة.")
 
-# --- 5. العرض ---
+# --- 6. العرض ---
 if st.session_state['data']:
     df_all = pd.DataFrame(st.session_state['data'])
     k1, k2, k3 = st.columns(3)
@@ -139,6 +211,7 @@ if st.session_state['data']:
     with t2:
         display_df = df_all.copy().rename(columns={"Name": "الاسم", "Price": "السعر", "Change": "التغير %", "RSI": f"RSI ({RSI_PERIOD})", "MACD": "MACD"})
         cols_to_show = ["الاسم", "السعر", "التغير %", f"RSI ({RSI_PERIOD})", "MACD"]
+        
         st.dataframe(
             display_df[cols_to_show].style.format({"السعر": "{:.2f}", "التغير %": "{:.2f}%", f"RSI ({RSI_PERIOD})": "{:.2f}"})
             .background_gradient(cmap='RdYlGn', subset=['التغير %']),
