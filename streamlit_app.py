@@ -2,9 +2,8 @@ import streamlit as st
 import yfinance as yf
 import pandas as pd
 import numpy as np
-import plotly.graph_objects as go
-import random
-import math
+import json
+import streamlit.components.v1 as components
 
 # --- استيراد البيانات ---
 try:
@@ -14,42 +13,31 @@ except ImportError:
     st.stop()
 
 TICKERS = {item['symbol']: item['name'] for item in STOCKS_DB}
-SECTORS_MAP = {item['name']: item['sector'] for item in STOCKS_DB}
 
-# --- 1. إعداد الصفحة ---
-st.set_page_config(page_title="TASI 3D Touch", layout="wide", initial_sidebar_state="collapsed")
+# --- إعداد الصفحة ---
+st.set_page_config(page_title="TASI Native Pro", layout="wide", initial_sidebar_state="collapsed")
 
 st.markdown("""
 <style>
-    @import url('https://fonts.googleapis.com/css2?family=Cairo:wght@400;700&display=swap');
-    html, body, [class*="css"] { font-family: 'Cairo', sans-serif; }
-    
-    .stApp { background-color: #000000; color: #ffffff; }
-    
-    div.stButton > button {
-        background: radial-gradient(circle, #00b0ff 0%, #000000 100%);
-        border: 1px solid #40c4ff; color: white;
-        padding: 15px 30px; border-radius: 50px;
-        font-weight: bold; font-size: 20px; width: 100%;
-        box-shadow: 0 0 30px rgba(0, 176, 255, 0.5);
-    }
-    div.stButton > button:hover {
-        transform: scale(1.05);
-        box-shadow: 0 0 50px rgba(0, 176, 255, 0.8);
-    }
+    .stApp { background-color: #131722; color: #d1d4dc; }
+    .block-container { padding-top: 1rem; padding-bottom: 0rem; }
+    h1 { font-family: 'Arial'; }
+    div.stButton > button { background-color: #2962ff; color: white; border: none; width: 100%; }
 </style>
 """, unsafe_allow_html=True)
 
-# --- 2. الإعدادات ---
+# --- القائمة الجانبية ---
 with st.sidebar:
     st.header("⚙️ التحكم")
-    # خيار جديد لإظهار/إخفاء الأسماء
-    SHOW_LABELS = st.checkbox("إظهار أسماء الأسهم", value=False, help="قد يسبب ازدحاماً إذا كانت الأسهم كثيرة")
+    selected_symbol = st.selectbox("السهم", list(TICKERS.keys()), format_func=lambda x: f"{TICKERS[x]} ({x.replace('.SR','')})")
+    
     st.divider()
-    ATR_MULT = st.number_input("ATR Multiplier", 1.0, 3.0, 1.5)
-    BOX_LOOKBACK = st.slider("نطاق البحث", 5, 50, 20)
+    st.subheader("📦 إعدادات المؤشر")
+    ATR_LENGTH = st.number_input("ATR Length", value=14)
+    ATR_MULT = st.number_input("ATR Multiplier", value=1.5, step=0.1)
+    BOX_LOOKBACK = st.slider("Lookback Candles", 20, 200, 100)
 
-# --- 3. الدوال الفنية ---
+# --- الدوال الفنية (Python Logic) ---
 def calculate_atr(df, period=14):
     high_low = df['High'] - df['Low']
     high_close = np.abs(df['High'] - df['Close'].shift())
@@ -57,189 +45,209 @@ def calculate_atr(df, period=14):
     ranges = pd.concat([high_low, high_close, low_close], axis=1)
     return ranges.max(axis=1).ewm(alpha=1/period, min_periods=period, adjust=False).mean()
 
-def get_box_status(df, lookback):
-    if len(df) < 30: return "---"
-    df['ATR'] = calculate_atr(df)
-    prices = df.iloc[-lookback:].reset_index(); atrs = df['ATR'].iloc[-lookback:].values
-    latest_status = "---"
+def get_boxes_data(df):
+    # خوارزمية الصناديق (نفس منطق Pine Script)
+    df['ATR'] = calculate_atr(df, ATR_LENGTH)
     
-    in_series = False; mode = None; start_open = 0.0; end_close = 0.0
+    in_series = False; mode = None; start_open = 0.0; end_close = 0.0; start_time = 0
+    boxes = []
     
-    for i in range(len(prices)):
-        row = prices.iloc[i]; close = row['Close']; open_p = row['Open']
-        is_green = close > open_p; is_red = close < open_p
-        current_atr = atrs[i]
+    # تحويل البيانات إلى قائمة للسرعة
+    records = df.to_dict('records')
+    
+    for i in range(len(records)):
+        row = records[i]
+        close = row['Close']; open_p = row['Open']
+        time_val = int(row['Date'].timestamp()) # وقت الشمعة
+        
+        is_green = close > open_p
+        is_red = close < open_p
+        current_atr = row['ATR']
+        
         if np.isnan(current_atr): continue
+        
         if not in_series:
-            if is_green: in_series = True; mode = 'bull'; start_open = open_p
-            elif is_red: in_series = True; mode = 'bear'; start_open = open_p
+            if is_green: in_series = True; mode = 'bull'; start_open = open_p; start_time = time_val
+            elif is_red: in_series = True; mode = 'bear'; start_open = open_p; start_time = time_val
         elif in_series:
             if mode == 'bull' and is_green: end_close = close
             elif mode == 'bear' and is_red: end_close = close
             elif (mode == 'bull' and is_red) or (mode == 'bear' and is_green):
                 final_close = end_close if end_close != 0 else start_open
                 price_move = abs(final_close - start_open)
+                
                 if price_move >= current_atr * ATR_MULT:
-                    current_price = prices.iloc[-1]['Close']
-                    box_top = max(start_open, final_close); box_bottom = min(start_open, final_close)
-                    if mode == 'bull':
-                        if current_price >= box_bottom: latest_status = "Bull"
-                    else:
-                        if current_price <= box_top: latest_status = "Bear"
-                in_series = True; mode = 'bull' if is_green else 'bear'; start_open = open_p; end_close = close
-    return latest_status
+                    box_top = max(start_open, final_close)
+                    box_bottom = min(start_open, final_close)
+                    
+                    # إضافة الصندوق للقائمة
+                    boxes.append({
+                        "start": start_time,
+                        "end": time_val, # نهاية الصندوق عند الكسر
+                        "top": box_top,
+                        "bottom": box_bottom,
+                        "mid": (box_top + box_bottom) / 2,
+                        "type": mode, # bull or bear
+                        "color": "rgba(41, 98, 255, 0.2)" if mode == 'bull' else "rgba(255, 82, 82, 0.2)",
+                        "borderColor": "#2962ff" if mode == 'bull' else "#ff5252"
+                    })
+                
+                # إعادة تعيين
+                in_series = True
+                mode = 'bull' if is_green else 'bear'
+                start_open = open_p; end_close = close; start_time = time_val
+                
+    # تمديد الصناديق الأخيرة لتصل إلى الحاضر (اختياري، هنا نوقفها عند الكسر)
+    return boxes
 
-def get_color_hex(status):
-    if status == "Bull": return "#00e676" 
-    elif status == "Bear": return "#ff1744" 
-    else: return "#607d8b" 
-
-# --- 4. المحرك الرئيسي ---
-st.title("🌌 TASI 3D Universe (Interactive)")
-
-if 'galaxy_data_v17' not in st.session_state: st.session_state['galaxy_data_v17'] = []
-
-if st.button("🪐 استكشاف الكون (Build Galaxy)"):
-    st.session_state['galaxy_data_v17'] = []
-    progress = st.progress(0); status = st.empty()
-    tickers = list(TICKERS.keys())
+# --- تجهيز البيانات ---
+@st.cache_data
+def get_chart_json(symbol):
+    df = yf.download(symbol, period="2y", interval="1d", progress=False)
+    if df.empty: return None, None
     
-    chunk_size = 30
-    for i in range(0, len(tickers), chunk_size):
-        chunk = tickers[i:i + chunk_size]
-        status.text(f"معالجة البيانات... {i//chunk_size + 1}")
-        try:
-            raw_daily = yf.download(chunk, period="2y", interval="1d", group_by='ticker', auto_adjust=False, threads=True, progress=False)
-            if not raw_daily.empty:
-                for sym in chunk:
-                    try:
-                        name = TICKERS[sym]; sector = SECTORS_MAP.get(name, "أخرى")
-                        try: df_d = raw_daily[sym].copy()
-                        except: continue
+    df.reset_index(inplace=True)
+    
+    # حساب الصناديق
+    boxes = get_boxes_data(df)
+    
+    # تجهيز الشموع
+    candles = []
+    for _, row in df.iterrows():
+        t = int(row['Date'].timestamp())
+        candles.append({
+            "time": t, "open": row['Open'], "high": row['High'], "low": row['Low'], "close": row['Close']
+        })
+        
+    return json.dumps(candles), json.dumps(boxes)
+
+# --- التطبيق ---
+st.title(f"📈 {TICKERS[selected_symbol]} (مع مؤشر الصناديق)")
+
+candles_json, boxes_json = get_chart_json(selected_symbol)
+
+if candles_json:
+    # --- كود الجافاسكربت السحري (Native Plugin) ---
+    # هذا الكود ينشئ "Custom Primitive" لرسم المربعات مباشرة على الشارت
+    html_code = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <script src="https://unpkg.com/lightweight-charts/dist/lightweight-charts.standalone.production.js"></script>
+        <style>
+            body {{ margin: 0; padding: 0; background-color: #131722; overflow: hidden; }}
+            #chart {{ position: absolute; width: 100%; height: 100%; }}
+        </style>
+    </head>
+    <body>
+        <div id="chart"></div>
+        <script>
+            // 1. تعريف "راسم الصناديق" (Custom Box Renderer)
+            class BoxSeriesRenderer {{
+                constructor() {{ this._data = null; }}
+                draw(target, priceConverter) {{
+                    target.useBitmapCoordinateSpace(scope => this._drawImpl(scope, priceConverter));
+                }}
+                update(data, options) {{ this._data = data; }}
+                _drawImpl(scope, priceConverter) {{
+                    if (this._data === null) return;
+                    const ctx = scope.context;
+                    const timeScale = scope.timeScale;
+                    
+                    this._data.forEach(box => {{
+                        // تحويل الوقت والسعر إلى إحداثيات بكسل
+                        const x1 = timeScale.timeToCoordinate(box.start);
+                        const x2 = timeScale.timeToCoordinate(box.end);
+                        const yTop = priceConverter.priceToCoordinate(box.top);
+                        const yBottom = priceConverter.priceToCoordinate(box.bottom);
+                        const yMid = priceConverter.priceToCoordinate(box.mid);
                         
-                        col = 'Close' if 'Close' in df_d.columns else 'Adj Close'
-                        if col in df_d.columns:
-                            df_d = df_d.rename(columns={col: 'Close'}); df_d = df_d.dropna()
-                            if len(df_d) > 50:
-                                s_d = get_box_status(df_d, BOX_LOOKBACK)
-                                df_w = df_d.resample('W').agg({'Open':'first', 'High':'max', 'Low':'min', 'Close':'last', 'Volume':'sum'}).dropna()
-                                s_w = get_box_status(df_w, BOX_LOOKBACK)
-                                df_m = df_d.resample('ME').agg({'Open':'first', 'High':'max', 'Low':'min', 'Close':'last', 'Volume':'sum'}).dropna()
-                                s_m = get_box_status(df_m, BOX_LOOKBACK)
-                                
-                                st.session_state['galaxy_data_v17'].append({
-                                    "Name": name, "Sector": sector,
-                                    "Daily": s_d, "Weekly": s_w, "Monthly": s_m,
-                                    "Price": df_d['Close'].iloc[-1]
-                                })
-                    except: continue
-        except: pass
-        progress.progress(min((i + chunk_size) / len(tickers), 1.0))
-    progress.empty(); status.success("تم!")
+                        // التحقق من أن الصندوق داخل الشاشة
+                        if (x1 === null || x2 === null) return; 
+                        
+                        const width = x2 - x1;
+                        const height = yBottom - yTop; // في Canvas الـ Y يزيد للأسفل
 
-# --- 5. الرسم (تفعيل الأسماء واللمس) ---
-if st.session_state['galaxy_data_v17']:
-    df = pd.DataFrame(st.session_state['galaxy_data_v17'])
-    
-    # 1. الشمس
-    fig = go.Figure(data=[go.Scatter3d(
-        x=[0], y=[0], z=[0],
-        mode='markers+text',
-        marker=dict(size=60, color='#ffab00', opacity=1),
-        text=["<b>TASI</b>"], textfont=dict(size=24, color='white'),
-        hoverinfo='none'
-    )])
-    
-    sectors = df['Sector'].unique()
-    sector_radius = 450 
-    
-    for i, sec in enumerate(sectors):
-        sec_angle = (2 * math.pi * i) / len(sectors)
-        sec_x = sector_radius * math.cos(sec_angle)
-        sec_y = sector_radius * math.sin(sec_angle)
-        sec_z = 0
-        
-        # الكوكب (القطاع)
-        fig.add_trace(go.Scatter3d(
-            x=[sec_x], y=[sec_y], z=[sec_z],
-            mode='markers+text',
-            marker=dict(size=25, color='#2962ff', opacity=0.8),
-            text=[sec], textposition="top center",
-            textfont=dict(color='#82b1ff', size=14, weight="bold"),
-            hoverinfo='none'
-        ))
-        
-        # الأسهم
-        sec_stocks = df[df['Sector'] == sec]
-        
-        xs, ys, zs, colors, sizes, texts, labels = [], [], [], [], [], [], []
-        
-        for _, stock in sec_stocks.iterrows():
-            r = random.uniform(40, 100) 
-            theta = random.uniform(0, 2*math.pi)
-            phi = random.uniform(0, math.pi)
-            
-            dx = r * math.sin(phi) * math.cos(theta)
-            dy = r * math.sin(phi) * math.sin(theta)
-            dz = r * math.cos(phi) * 0.4
-            
-            xs.append(sec_x + dx)
-            ys.append(sec_y + dy)
-            zs.append(sec_z + dz)
-            
-            colors.append(get_color_hex(stock['Daily']))
-            
-            size = 5
-            if stock['Daily'] == 'Bull' and stock['Weekly'] == 'Bull': size = 12
-            sizes.append(size)
-            
-            # النص عند التحويم (Tooltip)
-            tooltip = f"<b>{stock['Name']}</b><br>{stock['Price']:.2f}<br>D:{stock['Daily']} W:{stock['Weekly']}"
-            texts.append(tooltip)
-            # النص الظاهر (Label)
-            labels.append(stock['Name'])
-            
-        # تحديد وضع العرض (نص أم بدون نص)
-        mode_setting = 'markers+text' if SHOW_LABELS else 'markers'
-        
-        fig.add_trace(go.Scatter3d(
-            x=xs, y=ys, z=zs,
-            mode=mode_setting, # تفعيل النص بناءً على الخيار
-            marker=dict(size=sizes, color=colors, opacity=0.9, line=dict(width=0)),
-            text=labels if SHOW_LABELS else texts, # إذا أظهرنا الأسماء نضع الاسم، وإلا نضع التلميح
-            hovertext=texts, # التلميح يظهر دائماً عند اللمس
-            hoverinfo='text',
-            textfont=dict(size=10, color='rgba(255,255,255,0.8)'), # تنسيق الأسماء
-            name=sec
-        ))
+                        // رسم المستطيل
+                        ctx.fillStyle = box.color;
+                        ctx.fillRect(x1, yTop, width, height);
+                        
+                        // رسم الحدود
+                        ctx.lineWidth = 1;
+                        ctx.strokeStyle = box.borderColor;
+                        ctx.strokeRect(x1, yTop, width, height);
+                        
+                        // رسم خط المنتصف
+                        ctx.beginPath();
+                        ctx.setLineDash([4, 4]); // خط منقط
+                        ctx.moveTo(x1, yMid);
+                        ctx.lineTo(x2, yMid);
+                        ctx.stroke();
+                        ctx.setLineDash([]);
+                    }});
+                }}
+            }}
 
-    # --- إعدادات الكاميرا واللمس ---
-    fig.update_layout(
-        height=900,
-        margin=dict(l=0, r=0, b=0, t=0),
-        paper_bgcolor='black',
-        showlegend=False,
-        scene=dict(
-            xaxis=dict(visible=False, showbackground=False),
-            yaxis=dict(visible=False, showbackground=False),
-            zaxis=dict(visible=False, showbackground=False),
-            bgcolor='black',
-            dragmode='orbit', # أفضل وضع للمس (يدور حول المركز)
-            aspectmode='data'
-        )
-    )
+            // 2. تعريف "المكون الإضافي" (Custom Primitive)
+            class BoxPrimitive {{
+                constructor(data) {{
+                    this._data = data;
+                    this._renderer = new BoxSeriesRenderer();
+                }}
+                updateAllViews() {{ this._renderer.update(this._data, null); }}
+                paneViews() {{
+                    return [{{
+                        renderer: this._renderer,
+                    }}];
+                }}
+                priceAxisViews() {{ return []; }}
+                timeAxisViews() {{ return []; }}
+                attached(params) {{ 
+                    this._renderer.update(this._data, null);
+                    params.requestUpdate(); 
+                }}
+                detached() {{ }}
+            }}
+
+            // 3. إعداد الشارت الرئيسي
+            const chart = LightweightCharts.createChart(document.getElementById('chart'), {{
+                layout: {{ background: {{ type: 'solid', color: '#131722' }}, textColor: '#d1d4dc' }},
+                grid: {{ vertLines: {{ color: '#2B2B43' }}, horzLines: {{ color: '#2B2B43' }} }},
+                rightPriceScale: {{ borderColor: '#2B2B43' }},
+                timeScale: {{ borderColor: '#2B2B43', timeVisible: true }},
+                crosshair: {{ mode: LightweightCharts.CrosshairMode.Normal }},
+            }});
+
+            // 4. إضافة الشموع
+            const candleSeries = chart.addCandlestickSeries({{
+                upColor: '#089981', downColor: '#f23645',
+                borderUpColor: '#089981', borderDownColor: '#f23645',
+                wickUpColor: '#089981', wickDownColor: '#f23645',
+            }});
+            
+            const candlesData = {candles_json};
+            candleSeries.setData(candlesData);
+
+            // 5. حقن مؤشر الصناديق
+            const boxesData = {boxes_json};
+            const boxPrimitive = new BoxPrimitive(boxesData);
+            candleSeries.attachPrimitive(boxPrimitive); // تركيب المؤشر على السلسلة
+
+            // 6. التجاوب مع حجم الشاشة
+            new ResizeObserver(entries => {{
+                if (entries.length === 0 || entries[0].target !== document.getElementById('chart')) return;
+                const newRect = entries[0].contentRect;
+                chart.applyOptions({{ height: newRect.height, width: newRect.width }});
+            }}).observe(document.getElementById('chart'));
+            
+            chart.timeScale().fitContent();
+        </script>
+    </body>
+    </html>
+    """
     
-    # تفعيل خيارات التفاعل للجوال
-    config = {
-        'scrollZoom': True,
-        'displayModeBar': False,
-        'responsive': True
-    }
-    
-    st.plotly_chart(fig, use_container_width=True, config=config)
-    
-    if not SHOW_LABELS:
-        st.caption("💡 **تلميح:** فعّل خيار 'إظهار أسماء الأسهم' من القائمة الجانبية لرؤية الشركات بدون لمس.")
+    # عرض الشارت بارتفاع كبير
+    components.html(html_code, height=750)
 
 else:
-    st.write("")
+    st.warning("جاري تحميل البيانات...")
