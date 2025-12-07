@@ -3,20 +3,16 @@ import yfinance as yf
 import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
-import plotly.express as px
-from plotly.subplots import make_subplots
 from streamlit_option_menu import option_menu
-from scipy.signal import argrelextrema
 import os
 import joblib
 import time
 
-# محاولة استيراد مكتبات الذكاء (مع حماية)
+# --- مكتبات الذكاء الاصطناعي ---
 try:
     from sklearn.preprocessing import MinMaxScaler
     from tensorflow.keras.models import Sequential, load_model
     from tensorflow.keras.layers import Dense, LSTM, Dropout
-    from tensorflow.keras.callbacks import EarlyStopping
     AI_AVAILABLE = True
 except ImportError:
     AI_AVAILABLE = False
@@ -25,71 +21,78 @@ except ImportError:
 try:
     from data.saudi_tickers import STOCKS_DB
 except ImportError:
-    try:
-        from saudi_tickers import STOCKS_DB
-    except ImportError:
-        st.error("🚨 ملف البيانات مفقود.")
-        st.stop()
+    st.error("🚨 ملف البيانات مفقود.")
+    st.stop()
 
 TICKERS = {item['symbol']: item['name'] for item in STOCKS_DB}
-SECTORS = {item['name']: item['sector'] for item in STOCKS_DB}
+# تجميع الأسهم حسب القطاع للمحاكاة
+SECTORS_DICT = {}
+for item in STOCKS_DB:
+    sec = item['sector']
+    if sec not in SECTORS_DICT: SECTORS_DICT[sec] = []
+    SECTORS_DICT[sec].append(item['symbol'])
 
 # --- 1. إعداد الصفحة ---
-st.set_page_config(page_title="TASI AI Auto-Pilot", layout="wide", initial_sidebar_state="collapsed")
+st.set_page_config(page_title="TASI AI Replay", layout="wide", initial_sidebar_state="collapsed")
 
 st.markdown("""
 <style>
     @import url('https://fonts.googleapis.com/css2?family=Cairo:wght@400;700&display=swap');
     html, body, [class*="css"] { font-family: 'Cairo', sans-serif; }
     .stApp { background-color: #0e1117; color: #e0e0e0; }
-    div[data-testid="stMetric"] { background-color: #1d212b; border: 1px solid #333; padding: 10px; border-radius: 8px; }
-    [data-testid="stMetricValue"] { color: #ffffff !important; }
-    div.stButton > button { background: linear-gradient(90deg, #2962ff, #0039cb); color: white; border: none; padding: 10px; width: 100%; border-radius: 8px; }
+    
+    /* تنسيق البطاقات */
+    div[data-testid="stMetric"] {
+        background-color: #1d212b; border: 1px solid #333; padding: 15px; border-radius: 12px;
+    }
+    [data-testid="stMetricValue"] { color: #ffffff !important; font-size: 1.4rem; }
+    
+    /* الأزرار */
+    div.stButton > button {
+        background: linear-gradient(90deg, #6200ea, #3700b3); color: white; border: none;
+        padding: 12px; width: 100%; border-radius: 8px; font-weight: bold;
+    }
+    
+    /* القوائم */
+    .stSelectbox > div > div { background-color: #1e222d; color: white; }
 </style>
 """, unsafe_allow_html=True)
 
 # --- 2. القائمة العلوية ---
 selected_tab = option_menu(
     menu_title=None,
-    options=["الرئيسية", "مختبر الذكاء (AI Lab)", "الشارت الفني"],
-    icons=["house", "robot", "graph-up"],
+    options=["الرئيسية", "🧪 مختبر المحاكاة (AI Replay)", "الشارت الفني"],
+    icons=["house", "fast-forward-circle", "graph-up"],
     default_index=1,
     orientation="horizontal",
-    styles={"container": {"background-color": "transparent"}, "nav-link-selected": {"background-color": "#2962ff"}}
+    styles={"container": {"background-color": "transparent"}, "nav-link-selected": {"background-color": "#6200ea"}}
 )
 
-# --- 3. إعدادات ومجلدات ---
-if not os.path.exists('models'): os.makedirs('models') # مجلد لحفظ ملفات الذكاء
+# --- 3. الدوال المساعدة للذكاء ---
+if not os.path.exists('models'): os.makedirs('models')
 
-with st.sidebar:
-    st.header("⚙️ الإعدادات")
-    RSI_PERIOD = st.number_input("RSI Period", 14, 30, 24)
-    EMA_PERIOD = st.number_input("EMA Trend", 10, 200, 20)
-    ATR_MULT = st.number_input("ATR Mult", 1.0, 3.0, 1.5)
-    EPOCHS = st.slider("دورات التدريب (Epochs)", 1, 20, 5)
-
-# --- 4. دوال الذكاء الاصطناعي (AI Engine) ---
-def prepare_xy(df, lookback=60):
-    # إضافة المؤشرات كـ Features
+def prepare_data(df, lookback=60):
+    # إضافة المؤشرات (Features)
     df['RSI'] = 100 - (100 / (1 + df['Close'].diff().clip(lower=0).ewm(alpha=1/14).mean() / df['Close'].diff().clip(upper=0).abs().ewm(alpha=1/14).mean()))
     df['EMA'] = df['Close'].ewm(span=20).mean()
+    df['Box_High'] = df['High'].rolling(20).max() # محاكاة بسيطة للصندوق
     df.dropna(inplace=True)
     
     if len(df) < lookback + 10: return None, None, None, None
     
-    # نستخدم السعر و RSI و EMA للتدريب
+    # البيانات المستخدمة في التدريب: إغلاق، RSI، EMA
     dataset = df[['Close', 'RSI', 'EMA']].values
     scaler = MinMaxScaler(feature_range=(0, 1))
     scaled_data = scaler.fit_transform(dataset)
     
-    x_train, y_train = [], []
+    x, y = [], []
     for i in range(lookback, len(scaled_data)):
-        x_train.append(scaled_data[i-lookback:i, :]) 
-        y_train.append(scaled_data[i, 0]) # نتوقع السعر (العمود 0)
+        x.append(scaled_data[i-lookback:i, :])
+        y.append(scaled_data[i, 0]) # الهدف: السعر
         
-    return np.array(x_train), np.array(y_train), scaler, df
+    return np.array(x), np.array(y), scaler, df
 
-def build_lstm(input_shape):
+def build_model(input_shape):
     model = Sequential()
     model.add(LSTM(50, return_sequences=True, input_shape=input_shape))
     model.add(Dropout(0.2))
@@ -100,200 +103,152 @@ def build_lstm(input_shape):
     model.compile(optimizer='adam', loss='mean_squared_error')
     return model
 
-def train_stock(symbol):
-    """دالة تدرب سهم واحد وترجع النتائج"""
-    try:
-        df = yf.download(symbol, period="5y", interval="1d", progress=False)
-        if df.empty: return None
+# --- 4. المحرك الرئيسي (Simulation Engine) ---
+
+if selected_tab == "🧪 مختبر المحاكاة (AI Replay)":
+    st.title("🧪 مختبر إعادة التشغيل (AI Replay Strategy)")
+    st.markdown("هنا نقوم بتدريب الذكاء على 'سهم معلم' ثم نختبره على 'سهم طالب' في نفس القطاع لنرى دقة التوقع.")
+    
+    if not AI_AVAILABLE:
+        st.error("المكتبات غير متوفرة. يرجى تحديث requirements.txt")
+        st.stop()
+
+    # واجهة التحكم
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        chosen_sector = st.selectbox("1. اختر القطاع", list(SECTORS_DICT.keys()))
+    
+    # تصفية الأسهم حسب القطاع
+    sector_stocks = SECTORS_DICT[chosen_sector]
+    stock_options = {s: TICKERS.get(s, s) for s in sector_stocks}
+    
+    with c2:
+        teacher_sym = st.selectbox("2. سهم التدريب (المعلم)", options=list(stock_options.keys()), format_func=lambda x: stock_options[x])
+    with c3:
+        student_sym = st.selectbox("3. سهم الاختبار (المحاكاة)", options=list(stock_options.keys()), format_func=lambda x: stock_options[x], index=1 if len(stock_options)>1 else 0)
+
+    # إعدادات المحاكاة
+    replay_days = st.slider("فترة المحاكاة (Replay Days)", 30, 90, 60, help="عدد الأيام التي سنخفيها عن الذكاء ونطلب منه توقعها")
+    
+    if st.button("🚀 تشغيل المحاكاة (Start Replay)"):
+        status = st.empty()
+        prog = st.progress(0)
         
-        # إصلاح KeyError: التأكد من وجود الأعمدة
-        if isinstance(df.columns, pd.MultiIndex):
-            df.columns = df.columns.get_level_values(0)
+        try:
+            # 1. تدريب المعلم
+            status.info(f"جاري تدريب النموذج على بيانات {stock_options[teacher_sym]} لخمس سنوات...")
+            df_teacher = yf.download(teacher_sym, period="5y", interval="1d", progress=False)
             
-        x_train, y_train, scaler, df_clean = prepare_xy(df)
-        
-        if x_train is None: return None # بيانات غير كافية
-        
-        model = build_lstm((x_train.shape[1], x_train.shape[2]))
-        
-        # التدريب
-        history = model.fit(x_train, y_train, batch_size=32, epochs=EPOCHS, verbose=0)
-        
-        # الحفظ
-        safe_sym = symbol.replace(".SR", "")
-        model.save(f'models/{safe_sym}_model.keras')
-        joblib.dump(scaler, f'models/{safe_sym}_scaler.pkl')
-        
-        # تقييم سريع (آخر 60 يوم)
-        last_x = x_train[-1].reshape(1, x_train.shape[1], x_train.shape[2])
-        pred_scaled = model.predict(last_x)
-        
-        # عكس التحجيم (Trick for 3 features)
-        dummy = np.zeros((1, 3))
-        dummy[0, 0] = pred_scaled[0,0]
-        pred_price = scaler.inverse_transform(dummy)[0, 0]
-        
-        return {
-            "loss": history.history['loss'],
-            "last_price": df_clean['Close'].iloc[-1],
-            "predicted": pred_price,
-            "data_count": len(df_clean)
-        }
-    except Exception as e:
-        print(f"Error training {symbol}: {e}")
-        return None
-
-# --- 5. دوال التحليل الفني (الكود السابق المصحح) ---
-def process_technical(df):
-    # حساب المؤشرات بأمان
-    df['Change'] = df['Close'].pct_change() * 100
-    
-    delta = df['Close'].diff()
-    gain = delta.clip(lower=0); loss = -delta.clip(upper=0)
-    avg_gain = gain.ewm(alpha=1/24, min_periods=24, adjust=False).mean()
-    avg_loss = loss.ewm(alpha=1/24, min_periods=24, adjust=False).mean()
-    rs = avg_gain / avg_loss
-    df['RSI'] = 100 - (100 / (1 + rs))
-    
-    return df
-
-# --- 6. الواجهة والتشغيل ---
-
-# تهيئة الجلسة
-if 'ai_logs' not in st.session_state: st.session_state['ai_logs'] = []
-if 'training_active' not in st.session_state: st.session_state['training_active'] = False
-if 'market_data' not in st.session_state: st.session_state['market_data'] = []
-
-# === تبويب 1: مختبر الذكاء (AI Lab) ===
-if selected_tab == "مختبر الذكاء (AI Lab)":
-    st.markdown("### 🧠 الطيار الآلي (Auto-Pilot Training)")
-    st.info("سيقوم هذا النظام بالتدريب على الشركات واحدة تلو الأخرى، وحفظ خبرته في ملفات.")
-    
-    col_btn, col_stat = st.columns([1, 3])
-    
-    with col_btn:
-        if st.button("🔴 بدء التدريب المتسلسل (كل السوق)"):
-            st.session_state['training_active'] = True
-            st.session_state['ai_logs'] = [] # تصفير السجل
-    
-    # منطقة العرض الحي
-    status_placeholder = st.empty()
-    chart_placeholder = st.empty()
-    log_placeholder = st.empty()
-    
-    if st.session_state['training_active']:
-        tickers_list = list(TICKERS.keys())
-        progress_bar = st.progress(0)
-        
-        for i, sym in enumerate(tickers_list):
-            name = TICKERS[sym]
-            status_placeholder.markdown(f"### ⏳ جاري تدريب العقل على: **{name}** ({i+1}/{len(tickers_list)})")
+            # تنظيف البيانات
+            if isinstance(df_teacher.columns, pd.MultiIndex): df_teacher.columns = df_teacher.columns.get_level_values(0)
             
-            # عملية التدريب
-            result = train_stock(sym)
+            x_train, y_train, scaler, _ = prepare_data(df_teacher)
             
-            if result:
-                # تسجيل النتيجة
-                log_entry = {
-                    "الشركة": name,
-                    "السعر": result['last_price'],
-                    "توقع AI": result['predicted'],
-                    "الفرق %": ((result['predicted'] - result['last_price']) / result['last_price']) * 100,
-                    "الخطأ (Loss)": result['loss'][-1]
-                }
-                st.session_state['ai_logs'].insert(0, log_entry) # الأحدث في الأعلى
+            if x_train is None:
+                st.error("بيانات المعلم غير كافية.")
+                st.stop()
                 
-                # رسم منحنى التعلم (Loss Curve)
-                fig_loss = go.Figure()
-                fig_loss.add_trace(go.Scatter(y=result['loss'], mode='lines', name='Loss', line=dict(color='#00e676')))
-                fig_loss.update_layout(title=f"منحنى تعلم {name} (كلما نزل كان أفضل)", height=300, template="plotly_dark", margin=dict(l=0, r=0, t=30, b=0))
-                chart_placeholder.plotly_chart(fig_loss, use_container_width=True)
-                
-            progress_bar.progress((i + 1) / len(tickers_list))
+            model = build_model((x_train.shape[1], x_train.shape[2]))
+            model.fit(x_train, y_train, batch_size=32, epochs=5, verbose=0)
+            prog.progress(50)
             
-            # تحديث جدول السجل
-            if st.session_state['ai_logs']:
-                df_log = pd.DataFrame(st.session_state['ai_logs'])
-                # تلوين التوقع
-                def highlight_pred(val):
-                    color = '#00e676' if val > 0 else '#ff5252'
-                    return f'color: {color}; font-weight: bold'
+            # 2. اختبار الطالب (Replay)
+            status.info(f"جاري تشغيل المحاكاة على {stock_options[student_sym]}...")
+            df_student = yf.download(student_sym, period="2y", interval="1d", progress=False)
+            if isinstance(df_student.columns, pd.MultiIndex): df_student.columns = df_student.columns.get_level_values(0)
+            
+            # نأخذ البيانات حتى ما قبل فترة المحاكاة + فترة المحاكاة
+            # نحتاج تجهيز البيانات كاملة أولاً للحصول على المؤشرات الصحيحة
+            _, _, _, df_student_proc = prepare_data(df_student)
+            
+            # الآن نقسم البيانات:
+            # Real Data: البيانات الحقيقية كاملة
+            # Replay Data: آخر (replay_days) يوم
+            
+            real_prices = df_student_proc['Close'].values[-replay_days:]
+            dates = df_student_proc.index[-replay_days:]
+            
+            predicted_prices = []
+            
+            # حلقة المحاكاة (يوم بيوم)
+            # لكل يوم في فترة المحاكاة، نستخدم الـ 60 يوم التي قبله للتوقع
+            full_scaled_data = scaler.transform(df_student_proc[['Close', 'RSI', 'EMA']].values)
+            
+            for i in range(replay_days):
+                # تحديد الـ Window السابقة لهذا اليوم
+                # الإندكس الحالي في البيانات الكاملة هو: length - replay_days + i
+                curr_idx = len(full_scaled_data) - replay_days + i
                 
-                log_placeholder.dataframe(
-                    df_log.style.format({"السعر": "{:.2f}", "توقع AI": "{:.2f}", "الفرق %": "{:.2f}%", "الخطأ (Loss)": "{:.5f}"})
-                    .map(highlight_pred, subset=['الفرق %']),
-                    use_container_width=True, height=400
-                )
+                # نأخذ الـ 60 يوم السابقة
+                input_seq = full_scaled_data[curr_idx-60 : curr_idx]
+                input_seq = input_seq.reshape(1, 60, 3) # (1, 60, 3 features)
                 
-        status_placeholder.success("✅ تم الانتهاء من تدريب جميع شركات السوق!")
-        st.session_state['training_active'] = False
-
-    # عرض السجل إذا توقف التدريب
-    elif st.session_state['ai_logs']:
-        st.write("نتائج آخر جلسة تدريب:")
-        df_log = pd.DataFrame(st.session_state['ai_logs'])
-        st.dataframe(df_log, use_container_width=True)
-
-# === تبويب 2: الرئيسية (التحليل التقليدي) ===
-elif selected_tab == "الرئيسية":
-    st.markdown("### 📊 لوحة السوق (تحليل فني)")
-    
-    if st.button("🔄 تحديث البيانات (بدون AI)"):
-        st.session_state['market_data'] = []
-        tickers = list(TICKERS.keys())
-        p_bar = st.progress(0)
-        
-        # التحميل بنظام الدفعات (Batching) لتفادي الأخطاء
-        chunk_size = 50
-        for i in range(0, len(tickers), chunk_size):
-            chunk = tickers[i:i + chunk_size]
-            try:
-                raw = yf.download(chunk, period="1y", interval="1d", group_by='ticker', auto_adjust=False, threads=True, progress=False)
-                if not raw.empty:
-                    for sym in chunk:
-                        try:
-                            # إصلاح KeyError هنا: التأكد من وجود البيانات
-                            df = raw[sym].copy() if sym in raw.columns.levels[0] else pd.DataFrame()
-                            
-                            # معالجة الهيكلة MultiIndex
-                            if df.empty and sym in raw.columns: df = raw[[sym]] # محاولة أخرى
-                            
-                            if not df.empty:
-                                # توحيد الأعمدة
-                                if isinstance(df.columns, pd.MultiIndex): df.columns = df.columns.get_level_values(0)
-                                col = 'Close' if 'Close' in df.columns else 'Adj Close'
-                                
-                                df = df.rename(columns={col: 'Close'})
-                                df = df.dropna()
-                                
-                                if len(df) > 20:
-                                    df = process_technical(df)
-                                    last = df.iloc[-1]
-                                    
-                                    st.session_state['market_data'].append({
-                                        "الاسم": TICKERS.get(sym, sym),
-                                        "السعر": last['Close'],
-                                        "التغير %": last['Change'],
-                                        "RSI": last['RSI']
-                                    })
-                        except: continue
-            except: pass
-            p_bar.progress(min((i + chunk_size) / len(tickers), 1.0))
-        
-        p_bar.empty()
-    
-    if st.session_state['market_data']:
-        df_m = pd.DataFrame(st.session_state['market_data'])
-        
-        # الهيت ماب
-        if not df_m.empty:
-            fig = px.treemap(df_m, path=[px.Constant("السوق"), 'الاسم'], values='السعر', color='التغير %',
-                             color_continuous_scale=['#ff5252', '#1e222d', '#00e676'], range_color=[-3, 3])
+                # التوقع
+                pred_scaled = model.predict(input_seq, verbose=0)
+                
+                # عكس التحجيم
+                dummy = np.zeros((1, 3))
+                dummy[0, 0] = pred_scaled[0, 0]
+                pred_val = scaler.inverse_transform(dummy)[0, 0]
+                predicted_prices.append(pred_val)
+                
+                # تحديث الشريط
+                prog.progress(50 + int((i/replay_days)*50))
+            
+            prog.empty()
+            status.success("✅ اكتملت المحاكاة!")
+            
+            # 3. عرض النتائج
+            st.divider()
+            
+            # حساب الدقة (MAE - Mean Absolute Error)
+            mae = np.mean(np.abs(np.array(predicted_prices) - real_prices))
+            accuracy = 100 - (mae / np.mean(real_prices) * 100)
+            
+            # البطاقات
+            k1, k2, k3 = st.columns(3)
+            k1.metric("دقة المحاكاة", f"{accuracy:.1f}%")
+            k2.metric("متوسط الخطأ (ريال)", f"{mae:.2f}")
+            trend_match = "✅ متطابق" if (predicted_prices[-1] > predicted_prices[0]) == (real_prices[-1] > real_prices[0]) else "❌ معاكس"
+            k3.metric("تطابق الاتجاه العام", trend_match)
+            
+            # الرسم البياني (Replay Chart)
+            fig = go.Figure()
+            
+            # السعر الحقيقي
+            fig.add_trace(go.Scatter(
+                x=dates, y=real_prices,
+                mode='lines', name='السعر الحقيقي (Real)',
+                line=dict(color='#00e676', width=3)
+            ))
+            
+            # توقع الذكاء
+            fig.add_trace(go.Scatter(
+                x=dates, y=predicted_prices,
+                mode='lines', name='توقع الذكاء (AI)',
+                line=dict(color='#ff2950', width=2, dash='dot')
+            ))
+            
+            fig.update_layout(
+                title=f"نتيجة اختبار المحاكاة على {stock_options[student_sym]}",
+                template="plotly_dark", height=500,
+                xaxis_title="التاريخ", yaxis_title="السعر",
+                legend=dict(orientation="h", y=1.1)
+            )
             st.plotly_chart(fig, use_container_width=True)
             
-            st.dataframe(df_m.style.background_gradient(cmap='RdYlGn', subset=['التغير %']), use_container_width=True)
+            # التحليل النصي
+            with st.expander("📝 تقرير المحاكاة التفصيلي"):
+                st.write(f"""
+                - **المعلم:** {stock_options[teacher_sym]} (تم تدريب النموذج عليه).
+                - **الطالب:** {stock_options[student_sym]} (تم اختباره عليه).
+                - **النتيجة:** الذكاء الاصطناعي استطاع محاكاة حركة السعر بدقة **{accuracy:.1f}%**.
+                - **التفسير:** - إذا كان الخط الأحمر قريباً من الأخضر، فهذا يعني أن سلوك السهمين متشابه وأن استراتيجية الصناديق تعمل بكفاءة في هذا القطاع.
+                    - إذا كان هناك تباعد كبير، فهذا يعني أن سهم "{stock_options[student_sym]}" له سلوك شاذ ولا يتبع نمط القطاع العام.
+                """)
 
-# === تبويب 3: الشارت ===
-elif selected_tab == "الشارت الفني":
-    st.info("اختر سهماً من القائمة الجانبية (غير مفعل في وضع التدريب)")
+        except Exception as e:
+            st.error(f"حدث خطأ أثناء المحاكاة: {e}")
 
+elif selected_tab == "الرئيسية":
+    st.info("انتقل لتبويب 'مختبر المحاكاة' لتجربة ميزة الـ Replay.")
