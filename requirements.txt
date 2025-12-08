@@ -2,4 +2,9 @@ streamlit
 yfinance
 pandas
 numpy
-streamlit-lightweight-charts
+plotly
+xgboost
+scikit-learn
+ta
+matplotlib
+seaborn
