@@ -2,11 +2,4 @@ streamlit
 yfinance
 pandas
 numpy
-plotly
-jinja2
-matplotlib
-streamlit-option-menu
-scipy
-tensorflow
-scikit-learn
-joblib
+streamlit-lightweight-charts
