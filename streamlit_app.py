@@ -1,83 +1,186 @@
-import matplotlib.pyplot as plt
-import matplotlib.dates as mdates
+import streamlit as st
+import yfinance as yf
 import pandas as pd
+import plotly.graph_objects as go
+from datetime import datetime, timedelta
 import numpy as np
 
-# إعداد البيانات (محاكاة دقيقة بناءً على بيانات 2025 المستخرجة)
-dates = pd.date_range(start='2025-06-01', end='2025-12-08', freq='B') # Business days
-# مسار سعري يحاكي البيانات: قاع في يونيو (91.20) -> قمة في أكتوبر (105.30) -> هبوط حالي (96.00)
-prices = []
-for d in dates:
-    month = d.month
-    day = d.day
-    # Logic to mimic the trend:
-    if month == 6: base = 92 + (np.random.normal(0, 0.5)) # June Lows
-    elif month == 7: base = 95 + (np.random.normal(0, 0.5))
-    elif month == 8: base = 94 + (np.random.normal(0, 0.5))
-    elif month == 9: base = 98 + (d.day/30 * 4) # Rising
-    elif month == 10: base = 104 + (np.random.normal(0, 0.8)) # Peak Oct
-    elif month == 11: base = 101 - (d.day/30 * 3) # Falling Nov
-    elif month == 12: base = 96 + (np.random.normal(0, 0.3)) # Current Dec
-    else: base = 96
-    prices.append(base)
+# إعدادات الصفحة
+st.set_page_config(layout="wide", page_title="Mudarib v3 - Pro Terminal")
 
-# ضبط آخر سعر ليكون 96.00 بدقة
-prices[-1] = 96.00
+# --- CSS Styling for Professional Look ---
+st.markdown("""
+<style>
+    .stApp { background-color: #0e1117; }
+    h1, h2, h3 { color: #00ffcc !important; font-family: 'Courier New', monospace; }
+    .metric-card { background-color: #1c1f26; padding: 10px; border-radius: 5px; border-left: 5px solid #00ffcc; }
+</style>
+""", unsafe_allow_html=True)
 
-df = pd.DataFrame({'Date': dates, 'Close': prices})
-df['Open'] = df['Close'].shift(1)
-df['High'] = df[['Open', 'Close']].max(axis=1) + 0.5
-df['Low'] = df[['Open', 'Close']].min(axis=1) - 0.5
-df.dropna(inplace=True)
+# --- HEADER ---
+st.title("⚡ Mudarib v3 | Institutional Analysis Terminal")
+st.markdown("---")
 
-# رسم الشارت
-fig, ax = plt.subplots(figsize=(12, 6), facecolor='#0e1117')
-ax.set_facecolor('#0e1117')
+# --- SIDEBAR INPUTS ---
+st.sidebar.header("🔍 Stock Settings")
+symbol_input = st.sidebar.text_input("Stock Symbol", value="AAPL").upper()
+market_suffix = st.sidebar.selectbox("Market/Exchange Suffix", ["", ".SR", ".L", ".HK", ".NS"], index=0)
+timeframe = st.sidebar.selectbox("Timeframe", ["1d", "1wk", "1mo"], index=0)
+lookback_years = st.sidebar.slider("Lookback Period (Years)", 1, 10, 3)
 
-# ألوان الشموع
-up = df[df.Close >= df.Open]
-down = df[df.Close < df.Open]
-col_up = '#00b894'
-col_down = '#ff7675'
+full_symbol = f"{symbol_input}{market_suffix}" if market_suffix else symbol_input
 
-# رسم الشموع
-width = .6
-width2 = .05
-ax.bar(up.Date, up.Close-up.Open, width, bottom=up.Open, color=col_up, alpha=0.8)
-ax.bar(up.Date, up.High-up.Close, width2, bottom=up.Close, color=col_up)
-ax.bar(up.Date, up.Open-up.Low, width2, bottom=up.Low, color=col_up)
+# --- 1) DATA FETCHING & VALIDITY ---
+@st.cache_data
+def load_data(ticker, period, interval):
+    try:
+        data = yf.download(ticker, period=period, interval=interval)
+        return data
+    except Exception as e:
+        return None
 
-ax.bar(down.Date, down.Open-down.Close, width, bottom=down.Close, color=col_down, alpha=0.8)
-ax.bar(down.Date, down.High-down.Open, width2, bottom=down.Open, color=col_down)
-ax.bar(down.Date, down.Close-down.Low, width2, bottom=down.Low, color=col_down)
+# جلب البيانات
+data = load_data(full_symbol, f"{lookback_years}y", timeframe)
 
-# إضافة المستويات والتحليل
-# 1. Supply Zone / Premium
-ax.axhspan(102, 105, color='#d63031', alpha=0.2, label='Supply Zone (Premium)')
-ax.text(df.Date.iloc[int(len(df)*0.8)], 104, 'PREMIUM ZONE', color='#ff7675', fontsize=9, fontweight='bold')
+if data is not None and not data.empty:
+    current_price = data['Close'].iloc[-1]
+    
+    # --- 2) MULTI-SCHOOL ALGORITHMS ---
+    
+    # >> A. ICT/SMC Logic (Fair Value Gaps - FVG)
+    def identify_fvg(df):
+        fvg_zones = []
+        for i in range(2, len(df)):
+            # Bullish FVG: Low of candle i-2 > High of candle i
+            if df['Low'].iloc[i-2] > df['High'].iloc[i]: 
+                 # This is a simplifed logic for visual gap
+                 pass
+            
+            # Simple Gap Logic for FVG (Bullish)
+            # Candle 0 High < Candle 2 Low
+            curr_high = df['High'].iloc[i]
+            prev2_low = df['Low'].iloc[i-2]
+            prev1_close = df['Close'].iloc[i-1]
+            prev1_open = df['Open'].iloc[i-1]
+            
+            # Big Bullish Candle check
+            if prev1_close > prev1_open and prev2_low > curr_high:
+                 # Potentially huge gap, but let's stick to standard FVG
+                 pass
 
-# 2. Demand Zone / Order Block
-ax.axhspan(88, 92, color='#00b894', alpha=0.2, label='Demand Zone (Discount)')
-ax.text(df.Date.iloc[int(len(df)*0.1)], 89, 'BULLISH OB + SSL', color='#55efc4', fontsize=9, fontweight='bold')
+        # Let's use a simpler heuristic for visualization:
+        # Detect Imbalance (Large candles with little overlap)
+        df['Body'] = abs(df['Close'] - df['Open'])
+        df['AvgBody'] = df['Body'].rolling(20).mean()
+        df['Imbalance'] = np.where(df['Body'] > 1.5 * df['AvgBody'], True, False)
+        return df
 
-# 3. Current Price Line
-ax.axhline(96.00, color='white', linestyle='--', linewidth=0.8)
-ax.text(df.Date.iloc[-1], 96.50, 'Current: 96.00', color='white', fontweight='bold')
+    data = identify_fvg(data)
 
-# 4. Liquidity Line (SSL)
-ssl_price = 91.20
-ax.axhline(ssl_price, color='yellow', linestyle=':', linewidth=1)
-ax.text(df.Date.iloc[int(len(df)*0.1)], ssl_price-1.5, 'SSL (Liquidity Pool) $$$', color='yellow', fontsize=8)
+    # >> B. Support & Resistance (Pivot Points)
+    data['Pivot_High'] = data['High'].rolling(window=20, center=True).max()
+    data['Pivot_Low'] = data['Low'].rolling(window=20, center=True).min()
 
-# العناوين والتنسيق
-ax.set_title('Al Rajhi (1120) - SMC & Wyckoff Analysis [Dec 08, 2025]', color='white', fontsize=14, fontweight='bold', pad=20)
-ax.tick_params(axis='x', colors='white')
-ax.tick_params(axis='y', colors='white')
-ax.grid(True, color='#2d3436', alpha=0.3)
+    # >> C. Volume Anomaly (Institutional Activity)
+    vol_avg = data['Volume'].rolling(20).mean()
+    data['Vol_Spike'] = data['Volume'] > 2 * vol_avg
 
-# إزالة الحدود
-for spine in ax.spines.values():
-    spine.set_visible(False)
+    # --- 3) VISUALIZATION (THE CHART) ---
+    fig = go.Figure()
 
-plt.tight_layout()
-plt.show()
+    # Candlestick
+    fig.add_trace(go.Candlestick(
+        x=data.index,
+        open=data['Open'], high=data['High'],
+        low=data['Low'], close=data['Close'],
+        name='Price'
+    ))
+
+    # Plot FVG / Imbalance Candles (Markers)
+    imbalance_dates = data[data['Imbalance']].index
+    imbalance_prices = data[data['Imbalance']]['High']
+    fig.add_trace(go.Scatter(
+        x=imbalance_dates, y=imbalance_prices,
+        mode='markers', marker=dict(color='yellow', size=5, symbol='diamond'),
+        name='Imbalance/Momentum (ICT)'
+    ))
+
+    # Plot Key Structure Levels (Support/Resistance)
+    # We take the last 3 distinct pivot levels to avoid clutter
+    last_pivots_h = data['Pivot_High'].dropna().unique()[-3:]
+    last_pivots_l = data['Pivot_Low'].dropna().unique()[-3:]
+
+    for level in last_pivots_h:
+        fig.add_hline(y=level, line_dash="dash", line_color="red", annotation_text="Key Res (SMC)", annotation_position="top right")
+    
+    for level in last_pivots_l:
+        fig.add_hline(y=level, line_dash="dash", line_color="green", annotation_text="Key Supp (SMC)", annotation_position="bottom right")
+
+    # Layout Updates
+    fig.update_layout(
+        title=f"{full_symbol} - Institutional Analysis Chart",
+        yaxis_title="Price",
+        xaxis_title="Date",
+        template="plotly_dark",
+        height=700,
+        xaxis_rangeslider_visible=False
+    )
+
+    # --- 4) GLOBAL CORRELATION MODEL ---
+    st.sidebar.markdown("---")
+    st.sidebar.subheader("🌍 Global Macro Data")
+    
+    macro_tickers = {"Gold": "GC=F", "Oil": "CL=F", "S&P500": "^GSPC", "DXY": "DX-Y.NYB"}
+    correlations = {}
+    
+    # Calculate Correlation
+    for name, ticker in macro_tickers.items():
+        macro_data = yf.download(ticker, period="1y", interval="1d", progress=False)['Close']
+        # Align data indices
+        aligned_data = pd.concat([data['Close'], macro_data], axis=1).dropna()
+        aligned_data.columns = ['Stock', 'Macro']
+        corr = aligned_data.corr().iloc[0, 1]
+        correlations[name] = corr
+
+    # --- DISPLAY SECTIONS ---
+    
+    # Top Metrics
+    col1, col2, col3, col4 = st.columns(4)
+    col1.metric("Current Price", f"{current_price:.2f}")
+    col2.metric("Trend Bias", "Bullish" if data['Close'].iloc[-1] > data['Close'].iloc[-20] else "Bearish")
+    col3.metric("Vol Spikes (Last 20d)", int(data['Vol_Spike'].iloc[-20:].sum()))
+    col4.metric("RSI (Approx)", round(100 - (100 / (1 + (data['Close'].diff().clip(lower=0).rolling(14).mean() / data['Close'].diff().clip(upper=0).abs().rolling(14).mean()).iloc[-1])), 2))
+
+    # Main Chart
+    st.plotly_chart(fig, use_container_width=True)
+
+    # Analysis Layout
+    c1, c2 = st.columns([2, 1])
+
+    with c1:
+        st.subheader("📋 Mudarib v3 Technical Report")
+        st.markdown(f"""
+        **1. Market Structure (SMC/Price Action):**
+        * السعر الحالي يتداول {'فوق' if current_price > data['Pivot_High'].iloc[-25] else 'تحت'} آخر قمة هيكلية (Swing High) المسجلة مؤخراً.
+        * مناطق السيولة (Liquidity) تتركز عند القيعان السابقة الموضحة بالخطوط الخضراء المتقطعة.
+        
+        **2. Volume & Imbalance (ICT):**
+        * تم اكتشاف عدد **{int(data['Imbalance'].iloc[-20:].sum())}** شموع زخم (Imbalance) في الفترة الأخيرة، مما يدل على تدخل مؤسساتي.
+        * الماس الأصفر على الشارت يوضح أماكن الزخم العالي.
+
+        **3. Wyckoff Perspective:**
+        * بناءً على تحليل الحجم والسعر، إذا كان السعر في نطاق عرضي مع حجم منخفض، فقد نكون في مرحلة (Phase B - Building Cause).
+        """)
+
+    with c2:
+        st.subheader("🔗 Global Correlations")
+        st.write("ارتباط السهم بالمؤشرات العالمية (1 سنة):")
+        for name, corr in correlations.items():
+            color = "green" if corr > 0.5 else "red" if corr < -0.5 else "white"
+            st.markdown(f"**{name}:** <span style='color:{color}'>{corr:.2f}</span>", unsafe_allow_html=True)
+            
+        st.info("الارتباط الإيجابي القوي (> 0.7) يعني أن السهم يتحرك مع المؤشر.")
+
+else:
+    st.error(f"Could not load data for symbol: {full_symbol}. Please check the symbol or market suffix.")
+
