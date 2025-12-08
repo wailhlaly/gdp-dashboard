@@ -7,13 +7,13 @@ import plotly.express as px
 from xgboost import XGBRegressor
 from sklearn.metrics import mean_absolute_error, r2_score
 from datetime import datetime, timedelta
-import time
+import os
 
 # ---------------------------------------------------------
-# 1. إعدادات الصفحة
+# 1. إعدادات الصفحة والتهيئة
 # ---------------------------------------------------------
 st.set_page_config(
-    page_title="محلل تاسي المتقدم (Pro)",
+    page_title="محلل تاسي الذكي (TASI AI Analyzer)",
     layout="wide",
     initial_sidebar_state="expanded"
 )
@@ -23,318 +23,298 @@ st.markdown("""
     .main { direction: rtl; }
     h1, h2, h3, h4, p, div { font-family: 'Tajawal', sans-serif; text-align: right; }
     .stMetric { text-align: right !important; direction: rtl; }
+    .stDataFrame { direction: ltr; } 
     div[data-testid="stSidebar"] { text-align: right; }
-    /* تنسيق صناديق الشرح */
-    .explanation-box {
-        background-color: #f0f2f6;
-        border-right: 5px solid #ff4b4b;
-        padding: 15px;
-        border-radius: 5px;
-        margin-bottom: 10px;
-        color: #31333F;
-    }
-    .positive-impact { border-right-color: #2ecc71; }
-    .negative-impact { border-right-color: #e74c3c; }
+    button[data-baseweb="tab"] { font-family: 'Tajawal', sans-serif; font-weight: bold; }
 </style>
 """, unsafe_allow_html=True)
 
 # ---------------------------------------------------------
-# 2. دوال التحليل المساعدة
+# 2. وظائف مساعدة (Helpers)
 # ---------------------------------------------------------
 
-def generate_explanation(feature_name, importance, correlation):
-    """توليد تعليل نصي لتأثير العامل"""
-    impact_type = "طردية" if correlation > 0 else "عكسية"
-    direction = "يرتفع" if correlation > 0 else "ينخفض"
-    
-    # ترجمة الأسماء للعربية
-    name_map = {
-        'S&P 500': 'السوق الأمريكي (S&P500)',
-        'Brent Oil': 'سعر نفط برنت',
-        'Gold': 'سعر الذهب',
-        'US 10Y Bond': 'عائد السندات الأمريكية',
-        'RSI': 'مؤشر القوة النسبية (RSI)',
-        'SMA_50': 'المتوسط المتحرك 50',
-        'SMA_200': 'المتوسط المتحرك 200',
-        'Month_Feat': 'موسمية الشهر الحالي'
-    }
-    ar_name = name_map.get(feature_name, feature_name)
-    
-    strength = "تأثير قوي جداً" if importance > 0.2 else "تأثير متوسط"
-    
-    explanation = f"""
-    **{ar_name}**: ({strength})
-    * **لماذا هو مؤثر؟** لأن البيانات التاريخية تظهر علاقة **{impact_type}** ({correlation:.2f}) مع سهمك.
-    * **كيف سيؤثر؟** بناءً على وضعه الحالي، عندما يرتفع هذا المؤشر، يميل سهمك لأن **{direction}**.
-    """
-    return explanation, "positive-impact" if correlation > 0 else "negative-impact"
+def compute_rsi(series, period=14):
+    delta = series.diff()
+    gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
+    rs = gain / loss
+    return 100 - (100 / (1 + rs))
 
-def analyze_market_breadth(tickers_list):
-    """تحليل شامل لقائمة أسهم (أداء الشهر + السيولة مقابل الوزن)"""
-    market_data = []
+def analyze_seasonality(df):
+    data = df.copy()
+    data['Return'] = data['Close'].pct_change() * 100
+    data['Month'] = data.index.month
+    data['Day'] = data.index.day_name()
+    data['Year'] = data.index.year
     
-    # تحديد تواريخ الشهر الحالي
-    end_date = datetime.now()
-    start_date = end_date.replace(day=1) # بداية الشهر الحالي
+    monthly_seasonality = data.groupby('Month')['Return'].mean()
+    days_order = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday']
+    daily_seasonality = data.groupby('Day')['Return'].mean().reindex(days_order)
+    monthly_heatmap = data.groupby(['Year', 'Month'])['Return'].sum().unstack()
     
-    progress_bar = st.progress(0)
-    status_text = st.empty()
+    return monthly_seasonality, daily_seasonality, monthly_heatmap
+
+# ---------------------------------------------------------
+# 3. تحميل قائمة الأسهم من الملف المحلي (الجديد)
+# ---------------------------------------------------------
+@st.cache_data
+def load_tickers_from_file():
+    """تحميل ملف الرموز من مجلد data"""
+    # المسارات المحتملة للملف
+    file_path_csv = os.path.join("data", "saudi_tickers.csv")
+    file_path_xlsx = os.path.join("data", "saudi_tickers.xlsx")
     
-    for i, ticker in enumerate(tickers_list):
+    df = None
+    if os.path.exists(file_path_csv):
         try:
-            # تنظيف الرمز
-            clean_ticker = str(ticker).strip()
-            if not clean_ticker.endswith('.SR'):
-                clean_ticker = f"{clean_ticker}.SR"
+            df = pd.read_csv(file_path_csv)
+        except:
+            pass
+    elif os.path.exists(file_path_xlsx):
+        try:
+            df = pd.read_excel(file_path_xlsx)
+        except:
+            pass
             
-            # جلب بيانات سريعة
-            stock = yf.Ticker(clean_ticker)
-            hist = stock.history(start=start_date, end=end_date)
-            
-            if not hist.empty:
-                current_price = hist['Close'].iloc[-1]
-                start_price = hist['Open'].iloc[0]
-                pct_change = ((current_price - start_price) / start_price) * 100
-                total_volume = hist['Volume'].sum()
-                avg_volume = hist['Volume'].mean()
-                traded_value = total_volume * current_price # سيولة تقريبية
-                
-                # محاولة جلب القيمة السوقية (قد تكون بطيئة قليلاً)
-                # نستخدم الحجم كبديل للوزن إذا لم تتوفر القيمة السوقية لتسريع العملية
-                # هنا سنفترض أن الحجم * السعر هو مؤشر للوزن في المحفظة اليومية
-                
-                market_data.append({
-                    'Ticker': clean_ticker.replace('.SR', ''),
-                    'Price': current_price,
-                    'Change%': pct_change,
-                    'Liquidity': traded_value,
-                    'Volume': avg_volume,
-                    # معادلة خفة السهم: (السيولة / السعر) كلما زادت السيولة مع سعر أقل كان أخف، 
-                    # أو ببساطة: الأسهم الخفيفة هي ذات القيمة السوقية المنخفضة. 
-                    # هنا سنستخدم اللوغاريتم للرسم البياني
-                    'Weight_Proxy': current_price * avg_volume # مؤشر تقريبي للوزن
-                })
-        except Exception:
-            continue
+    if df is not None:
+        # تنظيف البيانات: نفترض وجود عمود للرمز وعمود للاسم
+        # سنحاول تخمين أسماء الأعمدة إذا لم تكن قياسية
+        cols = df.columns.astype(str).str.lower()
         
-        # تحديث شريط التقدم
-        progress = (i + 1) / len(tickers_list)
-        progress_bar.progress(progress)
-        status_text.text(f"جاري تحليل {clean_ticker}...")
-    
-    status_text.empty()
-    progress_bar.empty()
-    
-    return pd.DataFrame(market_data)
+        symbol_col = next((c for c in df.columns if 'symbol' in str(c).lower() or 'code' in str(c).lower() or 'رمز' in str(c)), None)
+        name_col = next((c for c in df.columns if 'name' in str(c).lower() or 'company' in str(c).lower() or 'اسم' in str(c)), None)
+        
+        # إذا لم نجد أعمدة بالاسم، نأخذ العمود الأول كرمز والثاني كاسم
+        if not symbol_col:
+            symbol_col = df.columns[0]
+        if not name_col and len(df.columns) > 1:
+            name_col = df.columns[1]
+            
+        # إنشاء قاموس للعرض: "الاسم (الرمز)" -> "الرمز"
+        ticker_map = {}
+        for index, row in df.iterrows():
+            sym = str(row[symbol_col]).replace('.SR', '').strip()
+            name = str(row[name_col]).strip() if name_col else ""
+            display_label = f"{sym} - {name}"
+            ticker_map[display_label] = sym
+            
+        return ticker_map
+    return None
 
 # ---------------------------------------------------------
-# 3. جلب البيانات الأساسية
+# 4. جلب البيانات وتحليلها
 # ---------------------------------------------------------
+
 @st.cache_data(ttl=3600)
-def get_main_data(ticker, period_years):
-    end_date = datetime.now()
-    start_date = end_date - timedelta(days=period_years*365)
+def get_stock_data(ticker, start_date, end_date):
+    if not ticker.endswith('.SR'):
+        ticker = f"{ticker}.SR"
     
-    if not ticker.endswith('.SR'): ticker = f"{ticker}.SR"
-    
-    df = yf.download(ticker, start=start_date, end=end_date, progress=False, auto_adjust=False)
-    
+    try:
+        df = yf.download(ticker, start=start_date, end=end_date, progress=False, auto_adjust=False)
+    except Exception as e:
+        return None
+
     if isinstance(df.columns, pd.MultiIndex):
-        try: df.columns = df.columns.get_level_values(0)
-        except: pass
+        try:
+            df.columns = df.columns.get_level_values(0)
+        except:
+            pass
+    
     df = df.loc[:, ~df.columns.duplicated()]
+
+    if df.empty or 'Close' not in df.columns:
+        return None
     
-    if df.empty or 'Close' not in df.columns: return None
-    
-    # معالجة وتنظيف
-    for col in ['Open', 'High', 'Low', 'Close', 'Volume']:
-        df[col] = pd.to_numeric(df[col], errors='coerce')
-        
-    # المؤشرات
-    df['SMA_50'] = df['Close'].rolling(50).mean()
-    df['RSI'] = 100 - (100 / (1 + df['Close'].diff().apply(lambda x: x if x>0 else 0).rolling(14).mean() / df['Close'].diff().apply(lambda x: -x if x<0 else 0).rolling(14).mean()))
-    
-    # الموسمية
-    df['Month_Feat'] = df.index.month
+    cols_to_numeric = ['Open', 'High', 'Low', 'Close', 'Volume']
+    for col in cols_to_numeric:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors='coerce')
+
+    df['SMA_50'] = df['Close'].rolling(window=50).mean()
+    df['SMA_200'] = df['Close'].rolling(window=200).mean()
+    df['RSI'] = compute_rsi(df['Close'], 14)
+    df['BB_High'] = df['Close'].rolling(20).mean() + (df['Close'].rolling(20).std() * 2)
+    df['BB_Low'] = df['Close'].rolling(20).mean() - (df['Close'].rolling(20).std() * 2)
     
     return df
 
 @st.cache_data(ttl=3600)
-def get_global_data(start_date):
-    tickers = {'S&P 500': '^GSPC', 'Brent Oil': 'BZ=F', 'Gold': 'GC=F'}
+def get_global_indices(start_date, end_date):
+    tickers = {
+        'S&P 500': '^GSPC', 'Brent Oil': 'BZ=F', 
+        'Gold': 'GC=F', 'USD Index': 'DX-Y.NYB', 'US 10Y Bond': '^TNX'
+    }
     global_df = pd.DataFrame()
     for name, sym in tickers.items():
         try:
-            d = yf.download(sym, start=start_date, progress=False, auto_adjust=False)
-            if isinstance(d.columns, pd.MultiIndex): d.columns = d.columns.get_level_values(0)
-            d = d.loc[:, ~d.columns.duplicated()]
-            if 'Close' in d.columns:
-                global_df[name] = d['Close']
+            data = yf.download(sym, start=start_date, end=end_date, progress=False, auto_adjust=False)
+            if isinstance(data.columns, pd.MultiIndex):
+                data.columns = data.columns.get_level_values(0)
+            data = data.loc[:, ~data.columns.duplicated()]
+            if not data.empty and 'Close' in data.columns:
+                temp = data[['Close']].rename(columns={'Close': name})
+                if global_df.empty: global_df = temp
+                else: global_df = global_df.join(temp, how='outer')
         except: continue
-    
-    # ملء الفراغات وتوحيد التاريخ
-    global_df = global_df.resample('D').ffill()
+    global_df.fillna(method='ffill', inplace=True)
+    global_df.fillna(method='bfill', inplace=True)
     return global_df
 
-# ---------------------------------------------------------
-# 4. النمذجة (مع حساب الارتباط للتفسير)
-# ---------------------------------------------------------
-def train_explainable_model(df, horizon=30):
-    data = df.copy().dropna()
-    data['Target'] = data['Close'].shift(-int(horizon))
+def prepare_dataset(local_df, global_df):
+    combined = local_df.join(global_df, how='inner')
+    combined = combined.loc[:, ~combined.columns.duplicated()]
     
-    features = [c for c in data.columns if c not in ['Target', 'Open', 'High', 'Low', 'Volume', 'Adj Close']]
+    combined['Month_Feat'] = combined.index.month
+    combined['DayOfWeek_Feat'] = combined.index.dayofweek
+    combined['Quarter_Feat'] = combined.index.quarter
+
+    for col in global_df.columns:
+        if col in combined.columns:
+            combined[f'{col}_Pct'] = combined[col].pct_change()
+            combined[f'{col}_Lag1'] = combined[f'{col}_Pct'].shift(1)
+            combined[f'{col}_Lag3'] = combined[f'{col}_Pct'].shift(3)
+
+    combined.dropna(inplace=True)
+    return combined
+
+def train_prediction_model(df, target_col='Close', horizon=30):
+    data = df.copy()
+    data = data.loc[:, ~data.columns.duplicated()]
+    
+    if target_col not in data.columns:
+        return None, 0, 0, 0, pd.DataFrame(), [], []
+
+    try:
+        horizon = int(horizon)
+        data['Target'] = data[target_col].shift(-horizon)
+    except:
+        return None, 0, 0, 0, pd.DataFrame(), [], []
+
+    drop_cols = ['Target', 'Open', 'High', 'Low', 'Volume', 'Adj Close']
+    feature_cols = [c for c in data.columns if c not in drop_cols]
+    
     data.dropna(inplace=True)
-    
-    X = data[features]
+    if len(data) < 50: return None, 0, 0, 0, pd.DataFrame(), [], []
+
+    X = data[feature_cols]
     y = data['Target']
+    split_idx = int(len(X) * 0.85)
+    X_train, X_test = X.iloc[:split_idx], X.iloc[split_idx:]
+    y_train, y_test = y.iloc[:split_idx], y.iloc[split_idx:]
     
-    # حساب الارتباط (Correlation) لغرض التفسير
-    correlations = data[features].corrwith(data['Close']) # ارتباط مع السعر الحالي كبديل للفهم
+    model = XGBRegressor(n_estimators=150, learning_rate=0.05, max_depth=4, random_state=42, n_jobs=-1)
+    model.fit(X_train, y_train)
     
-    split = int(len(X)*0.85)
-    model = XGBRegressor(n_estimators=100, max_depth=4, learning_rate=0.05)
-    model.fit(X.iloc[:split], y.iloc[:split])
+    preds = model.predict(X_test)
+    score = r2_score(y_test, preds)
+    mae = mean_absolute_error(y_test, preds)
+    last_row_features = X.iloc[[-1]]
+    future_pred = model.predict(last_row_features)[0]
     
-    future_pred = model.predict(X.iloc[[-1]])[0]
+    importance = pd.DataFrame({'Feature': feature_cols, 'Importance': model.feature_importances_}).sort_values(by='Importance', ascending=False)
     
-    # تجميع البيانات للتفسير
-    importances = pd.DataFrame({
-        'Feature': features,
-        'Importance': model.feature_importances_,
-        'Correlation': correlations.values
-    }).sort_values('Importance', ascending=False)
-    
-    return future_pred, importances
+    return model, score, mae, future_pred, importance, preds, y_test
 
 # ---------------------------------------------------------
-# 5. الواجهة الرئيسية
+# 5. واجهة المستخدم (Main UI)
 # ---------------------------------------------------------
 
-# الشريط الجانبي
-st.sidebar.title("🛠️ أدوات التحكم")
-mode = st.sidebar.radio("اختر النمط:", ["تحليل سهم واحد", "تحليل ملف السوق"])
+st.sidebar.header("📊 إعدادات التحليل")
 
-if mode == "تحليل سهم واحد":
-    ticker = st.sidebar.text_input("رمز السهم", "1120")
-    horizon = st.sidebar.selectbox("فترة التوقع", [7, 30, 90], index=1)
+# --- التغيير هنا: تحميل القائمة المنسدلة ---
+ticker_map = load_tickers_from_file()
+selected_ticker = "1120" # الافتراضي
+
+if ticker_map:
+    # عرض قائمة منسدلة إذا وجدنا الملف
+    st.sidebar.success(f"تم تحميل {len(ticker_map)} شركة من الملف.")
+    selected_label = st.sidebar.selectbox("اختر الشركة", options=list(ticker_map.keys()))
+    selected_ticker = ticker_map[selected_label]
+else:
+    # العودة للإدخال اليدوي إذا لم يوجد الملف
+    st.sidebar.warning("لم يتم العثور على ملف data/saudi_tickers.csv")
+    selected_ticker = st.sidebar.text_input("رمز السهم", value="1120", help="أدخل الرمز يدوياً")
+# -------------------------------------------
+
+years_back = st.sidebar.slider("البيانات التاريخية (سنوات)", 1, 10, 3)
+forecast_days = st.sidebar.selectbox("فترة التوقع (أيام)", [7, 14, 30, 90], index=2)
+include_global = st.sidebar.checkbox("تضمين المؤشرات العالمية", value=True)
+
+if st.sidebar.button("تشغيل التحليل 🚀"):
     
-    if st.sidebar.button("ابدأ التحليل 🚀"):
-        with st.spinner("جاري تحليل البيانات وربط العلاقات..."):
-            local = get_main_data(ticker, 3)
-            if local is not None:
-                glob = get_global_data(local.index[0])
-                full = local.join(glob, how='left').fillna(method='ffill')
-                
-                # 1. التوقع والتعليل
-                pred, feats = train_explainable_model(full, horizon)
-                last_price = local['Close'].iloc[-1]
-                
-                # --- العرض ---
-                st.title(f"التحليل الذكي لسهم {ticker}")
-                
+    end_date = datetime.now()
+    start_date = end_date - timedelta(days=years_back*365)
+    
+    with st.spinner(f'جاري تحليل السهم {selected_ticker}...'):
+        local_df = get_stock_data(selected_ticker, start_date, end_date)
+        
+        if local_df is None:
+            st.error(f"لم يتم العثور على بيانات للرمز {selected_ticker}.")
+        else:
+            full_df = local_df.copy()
+            if include_global:
+                global_df = get_global_indices(start_date, end_date)
+                full_df = prepare_dataset(local_df, global_df)
+            else:
+                full_df = local_df.dropna()
+
+            # --- العرض ---
+            st.title(f"تحليل سهم: {selected_ticker} (TASI)")
+            
+            # KPIs
+            last_close = local_df['Close'].iloc[-1]
+            prev_close = local_df['Close'].iloc[-2]
+            chg_pct = ((last_close - prev_close) / prev_close) * 100
+            
+            kpi1, kpi2, kpi3, kpi4 = st.columns(4)
+            kpi1.metric("آخر سعر", f"{last_close:.2f}", f"{chg_pct:.2f}%")
+            kpi2.metric("SMA 200", f"{local_df['SMA_200'].iloc[-1]:.2f}")
+            kpi3.metric("RSI", f"{local_df['RSI'].iloc[-1]:.1f}")
+            kpi4.metric("الحجم", f"{local_df['Volume'].iloc[-1]:,.0f}")
+            
+            tab_tech, tab_season, tab_global, tab_ai = st.tabs(["📈 الرسم الفني", "📅 الموسمية", "🌍 الارتباطات", "🤖 توقعات AI"])
+            
+            with tab_tech:
+                fig = go.Figure()
+                fig.add_trace(go.Candlestick(x=local_df.index, open=local_df['Open'], high=local_df['High'], low=local_df['Low'], close=local_df['Close'], name='السعر'))
+                fig.add_trace(go.Scatter(x=local_df.index, y=local_df['BB_High'], line=dict(color='gray', width=1, dash='dot'), name='BB High'))
+                fig.add_trace(go.Scatter(x=local_df.index, y=local_df['BB_Low'], line=dict(color='gray', width=1, dash='dot'), name='BB Low'))
+                fig.update_layout(height=550, title="السعر مع نطاق بولنجر")
+                st.plotly_chart(fig, use_container_width=True)
+            
+            with tab_season:
+                monthly_avg, daily_avg, heatmap_data = analyze_seasonality(local_df)
                 c1, c2 = st.columns(2)
-                diff = pred - last_price
-                color = "green" if diff > 0 else "red"
-                c1.markdown(f"### السعر المتوقع ({horizon} يوم): <span style='color:{color}'>{pred:.2f} ريال</span>", unsafe_allow_html=True)
-                c1.metric("التغير المتوقع", f"{diff:.2f}", f"{(diff/last_price)*100:.2f}%")
-                
-                # --- قسم التعليل (الجديد) ---
-                st.markdown("---")
-                st.subheader("🧐 لماذا هذا التوقع؟ (تحليل العوامل المؤثرة)")
-                
-                col_exp, col_chart = st.columns([1, 1])
-                
-                with col_exp:
-                    # أخذ أهم 3 عوامل وشرحها
-                    top_3 = feats.head(3)
-                    for index, row in top_3.iterrows():
-                        text, style_class = generate_explanation(row['Feature'], row['Importance'], row['Correlation'])
-                        st.markdown(f"""
-                        <div class="explanation-box {style_class}">
-                        {text}
-                        </div>
-                        """, unsafe_allow_html=True)
-
-                with col_chart:
-                    fig = px.bar(feats.head(7), x='Importance', y='Feature', orientation='h', 
-                                 title="وزن العوامل في اتخاذ القرار", color='Correlation',
-                                 color_continuous_scale='RdBu')
-                    st.plotly_chart(fig, use_container_width=True)
-
-            else:
-                st.error("لم يتم العثور على البيانات.")
-
-elif mode == "تحليل ملف السوق":
-    st.sidebar.markdown("---")
-    uploaded_file = st.sidebar.file_uploader("ارفع ملف saudi_tickers (csv/xlsx)", type=['csv', 'xlsx'])
-    
-    if uploaded_file and st.sidebar.button("تحليل السوق بالكامل 📊"):
-        # قراءة الملف
-        try:
-            if uploaded_file.name.endswith('.csv'):
-                df_tickers = pd.read_csv(uploaded_file)
-            else:
-                df_tickers = pd.read_excel(uploaded_file)
-            
-            # نفترض أن العمود اسمه 'Ticker' أو 'Symbol' أو أول عمود
-            ticker_col = [c for c in df_tickers.columns if 'ticker' in c.lower() or 'symbol' in c.lower() or 'رمز' in c.lower()]
-            if ticker_col:
-                tickers_list = df_tickers[ticker_col[0]].tolist()
-            else:
-                tickers_list = df_tickers.iloc[:, 0].tolist()
-            
-            # تقليص القائمة للتجربة (اختياري، يمكنك إزالته لتحليل الكل)
-            # tickers_list = tickers_list[:30] 
-            
-            st.title("📊 تقرير مراقبة السوق (Market Watch)")
-            st.write(f"جاري تحليل أداء {len(tickers_list)} شركة لهذا الشهر...")
-            
-            market_df = analyze_market_breadth(tickers_list)
-            
-            if not market_df.empty:
-                # 1. شارت تقدم وتراجع السوق
-                st.subheader("1. أداء السوق لشهر الحالي")
-                
-                positive = market_df[market_df['Change%'] > 0].shape[0]
-                negative = market_df[market_df['Change%'] < 0].shape[0]
-                
-                c1, c2 = st.columns([1, 2])
                 with c1:
-                    fig_pie = px.pie(names=['صاعد', 'هابط'], values=[positive, negative], 
-                                     color_discrete_sequence=['#2ecc71', '#e74c3c'], hole=0.4)
-                    st.plotly_chart(fig_pie, use_container_width=True)
+                    fig_m = go.Figure(go.Bar(x=monthly_avg.index, y=monthly_avg.values, marker_color=['#2ecc71' if x>0 else '#e74c3c' for x in monthly_avg]))
+                    fig_m.update_layout(title="الأداء الشهري", xaxis_title="الشهر")
+                    st.plotly_chart(fig_m, use_container_width=True)
                 with c2:
-                    # أعلى الرابحين والخاسرين
-                    top_gainers = market_df.nlargest(5, 'Change%')
-                    st.write("**الأكثر ارتفاعاً:**")
-                    st.dataframe(top_gainers[['Ticker', 'Price', 'Change%']])
-                
-                st.markdown("---")
-                
-                # 2. شارت السيولة مقابل الوزن (خفة الأسهم)
-                st.subheader("2. خريطة السيولة والوزن (Lightness Map)")
-                st.info("💡 **كيف تقرأ هذا الشارت؟** الدوائر الكبيرة تعني سيولة عالية. الأسهم في الجهة اليسرى (وزن تقريبي منخفض) مع ارتفاع للأعلى تعني أسهم خفيفة دخلتها سيولة عالية (فرص مضاربية).")
-                
-                # استخدام مقياس لوغاريتمي للوزن والسيولة لرؤية أفضل
-                fig_bubble = px.scatter(
-                    market_df,
-                    x="Weight_Proxy",
-                    y="Liquidity",
-                    size="Liquidity",
-                    color="Change%",
-                    hover_name="Ticker",
-                    log_x=True,
-                    log_y=True,
-                    color_continuous_scale="RdBu",
-                    labels={"Weight_Proxy": "الوزن التقريبي (سعر × حجم)", "Liquidity": "قيمة التداول (السيولة)"},
-                    title="توزيع الشركات: الوزن مقابل السيولة (لون الدائرة يمثل التغير %)"
-                )
-                st.plotly_chart(fig_bubble, use_container_width=True)
-                
-                # جدول تفصيلي
-                with st.expander("عرض الجدول الكامل للبيانات"):
-                    st.dataframe(market_df.sort_values('Change%', ascending=False))
-                    
-        except Exception as e:
-            st.error(f"حدث خطأ أثناء قراءة الملف: {e}")
+                    fig_d = go.Figure(go.Bar(x=daily_avg.index, y=daily_avg.values, marker_color=['#2ecc71' if x>0 else '#e74c3c' for x in daily_avg]))
+                    fig_d.update_layout(title="الأداء اليومي", xaxis_title="اليوم")
+                    st.plotly_chart(fig_d, use_container_width=True)
+                fig_heat = px.imshow(heatmap_data, labels=dict(x="الشهر", y="السنة", color="العائد %"), color_continuous_scale='RdBu')
+                st.plotly_chart(fig_heat, use_container_width=True)
+
+            with tab_global:
+                if include_global and 'S&P 500' in full_df.columns:
+                    corr_cols = ['Close', 'S&P 500', 'Brent Oil', 'Gold', 'US 10Y Bond']
+                    avail = [c for c in corr_cols if c in full_df.columns]
+                    fig_corr = px.imshow(full_df[avail].corr(), text_auto=True, color_continuous_scale='RdBu_r', title="مصفوفة الارتباط")
+                    st.plotly_chart(fig_corr, use_container_width=True)
+                else: st.info("البيانات العالمية غير متوفرة.")
+
+            with tab_ai:
+                st.subheader(f"توقعات الذكاء الاصطناعي ({forecast_days} يوم)")
+                model, score, mae, future_pred, importance, preds, y_test = train_prediction_model(full_df, horizon=forecast_days)
+                if model:
+                    c1, c2 = st.columns(2)
+                    diff = future_pred - last_close
+                    c1.metric("السعر المتوقع", f"{future_pred:.2f}", f"{(diff/last_close)*100:.2f}%")
+                    c2.progress(max(0.0, min(1.0, score)))
+                    c2.caption(f"دقة النموذج R²: {score:.2f}")
+                    st.plotly_chart(px.bar(importance.head(10), x='Importance', y='Feature', orientation='h', title="أهم المؤشرات المؤثرة"), use_container_width=True)
+                else: st.error("البيانات غير كافية.")
+else:
+    st.info("👈 اختر الشركة واضغط 'تشغيل التحليل'")
