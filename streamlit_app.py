@@ -5,120 +5,105 @@ import plotly.graph_objects as go
 import numpy as np
 
 # --- PAGE CONFIG ---
-st.set_page_config(layout="wide", page_title="Mudarib v3 - Pro Terminal")
+st.set_page_config(layout="wide", page_title="Mudarib v3 - Mobile Pro")
 
-# --- STYLING ---
+# --- STYLING (Mobile Optimized) ---
 st.markdown("""
 <style>
     .stApp { background-color: #0e1117; }
-    h1, h2, h3 { color: #00ffcc !important; font-family: 'Segoe UI', sans-serif; }
-    .stMetric { background-color: #1c1f26; padding: 10px; border-radius: 5px; border: 1px solid #333; }
+    /* تحسين الهوامش للموبايل */
+    .block-container { padding-top: 1rem; padding-bottom: 5rem; }
+    h1 { font-size: 1.5rem !important; color: #00ffcc !important; }
 </style>
 """, unsafe_allow_html=True)
 
-# --- HEADER ---
-st.title("⚡ Mudarib v3 | Institutional Analysis")
-
 # --- SIDEBAR ---
-st.sidebar.header("⚙️ Market Data")
-symbol_input = st.sidebar.text_input("Symbol", value="2222").upper()
-market_suffix = st.sidebar.selectbox("Market", [".SR", "", ".L", ".HK"], index=0)
-timeframe = st.sidebar.selectbox("Timeframe", ["1d", "1wk"], index=0)
-lookback = st.sidebar.slider("History (Years)", 1, 5, 2)
+st.sidebar.header("⚙️ إعدادات السهم")
+symbol_input = st.sidebar.text_input("رمز السهم", value="2222").upper()
+market_suffix = st.sidebar.selectbox("السوق", [".SR", "", ".L", ".HK"], index=0)
+timeframe = st.sidebar.selectbox("الفاصي", ["1d", "1wk"], index=0)
+lookback = st.sidebar.slider("المدة (سنوات)", 1, 5, 2)
 
 full_symbol = f"{symbol_input}{market_suffix}" if market_suffix else symbol_input
 
-# --- 1) ROBUST DATA LOADING ---
+# --- 1) DATA LOADING ---
 @st.cache_data
-def get_clean_data(ticker, period, interval):
+def get_data(ticker, period, interval):
     try:
         df = yf.download(ticker, period=period, interval=interval, progress=False)
-        
-        # FIX: Flatten MultiIndex columns if they exist (The cause of ValueError)
         if isinstance(df.columns, pd.MultiIndex):
             df.columns = df.columns.get_level_values(0)
-            
-        if df.empty: return None
-        
-        return df
+        return df if not df.empty else None
     except:
         return None
 
-data = get_clean_data(full_symbol, f"{lookback}y", timeframe)
+data = get_data(full_symbol, f"{lookback}y", timeframe)
 
 if data is not None:
-    # --- 2) ADVANCED ANALYSIS ALGORITHMS ---
-    
-    # A. SMART IMBALANCE (CLEAN VERSION)
-    # بدلاً من تحديد كل شمعة، نحدد فقط الشموع التي حجم جسمها أكبر من 95% من الشموع الأخرى
+    # --- 2) ANALYSIS ---
+    # Smart Imbalance (Top 5% only)
     data['Body'] = abs(data['Close'] - data['Open'])
-    threshold = data['Body'].quantile(0.95) # Top 5% only
+    threshold = data['Body'].quantile(0.95)
     data['Institutional_Move'] = data['Body'] > threshold
 
-    # B. PIVOT POINTS (Structural Levels)
+    # Pivots
     data['Pivot_High'] = data['High'].rolling(20, center=True).max()
     data['Pivot_Low'] = data['Low'].rolling(20, center=True).min()
 
-    # --- 3) PROFESSIONAL VISUALIZATION ---
+    # --- 3) INTERACTIVE CHART SETUP ---
     fig = go.Figure()
 
-    # 1. Main Price
+    # Candlestick
     fig.add_trace(go.Candlestick(
-        x=data.index,
-        open=data['Open'], high=data['High'],
-        low=data['Low'], close=data['Close'],
-        name='Price Action'
+        x=data.index, open=data['Open'], high=data['High'],
+        low=data['Low'], close=data['Close'], name='Price'
     ))
 
-    # 2. Institutional Zones (Filtered - Not Spammy)
-    # نرسم فقط العلامات المهمة جداً
-    significant_moves = data[data['Institutional_Move']]
-    if not significant_moves.empty:
+    # Institutional Markers
+    sig_moves = data[data['Institutional_Move']]
+    if not sig_moves.empty:
         fig.add_trace(go.Scatter(
-            x=significant_moves.index, 
-            y=significant_moves['High'],
+            x=sig_moves.index, y=sig_moves['High'],
             mode='markers', 
-            marker=dict(color='yellow', size=6, symbol='diamond-open', line=dict(width=2)),
-            name='Institutional Imbalance (Top 5%)'
+            marker=dict(color='yellow', size=8, symbol='diamond-open', line=dict(width=2)),
+            name='Institutional Imbalance'
         ))
 
-    # 3. Key Structure Levels (Only the latest active ones)
+    # Support/Resistance Lines
     last_h = data['Pivot_High'].dropna().iloc[-1]
     last_l = data['Pivot_Low'].dropna().iloc[-1]
-    
-    fig.add_hline(y=last_h, line_dash="dash", line_color="rgba(255, 0, 0, 0.5)", annotation_text="Major Res", annotation_position="top right")
-    fig.add_hline(y=last_l, line_dash="dash", line_color="rgba(0, 255, 0, 0.5)", annotation_text="Major Supp", annotation_position="bottom right")
+    fig.add_hline(y=last_h, line_dash="dash", line_color="red", annotation_text="Res", annotation_position="top right")
+    fig.add_hline(y=last_l, line_dash="dash", line_color="green", annotation_text="Supp", annotation_position="bottom right")
 
-    # Chart Layout
+    # --- KEY FIX: MOBILE LAYOUT & INTERACTIVITY ---
     fig.update_layout(
-        title=f"Institutional Chart: {full_symbol}",
+        title=f"{full_symbol}",
         template="plotly_dark",
-        height=650,
+        height=700,  # جعل الشارت أطول للموبايل
         xaxis_rangeslider_visible=False,
-        plot_bgcolor="#0e1117",
-        paper_bgcolor="#0e1117"
+        dragmode='pan',  # السحب بالإصبع يحرك الشارت بدلاً من الزوم
+        margin=dict(l=10, r=10, t=40, b=40), # استغلال كامل الشاشة
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
     )
 
-    # --- DISPLAY DASHBOARD ---
+    # --- 4) DISPLAY WITH CONFIG ---
+    st.title("⚡ Mudarib v3")
     
-    # Metrics
-    curr_price = data['Close'].iloc[-1]
-    prev_price = data['Close'].iloc[-2]
-    change = ((curr_price - prev_price)/prev_price) * 100
-    
-    c1, c2, c3 = st.columns(3)
-    c1.metric("Current Price", f"{curr_price:.2f}", f"{change:.2f}%")
-    c2.metric("Market Phase", "Accumulation?" if curr_price < last_h and curr_price > last_l else "Trending")
-    c3.metric("Detected Inst. Moves", len(significant_moves))
+    # Metrics row
+    curr = data['Close'].iloc[-1]
+    c1, c2 = st.columns(2)
+    c1.metric("السعر الحالي", f"{curr:.2f}")
+    c2.metric("الحالة", "تجميع" if curr < last_h and curr > last_l else "اتجاه")
 
-    # Plot
-    st.plotly_chart(fig, use_container_width=True)
+    # THE MAGIC FIX: config settings
+    st.plotly_chart(fig, use_container_width=True, config={
+        'scrollZoom': True,       # السماح بالزوم عبر اللمس
+        'displayModeBar': True,   # إظهار شريط الأدوات
+        'displaylogo': False,
+        'modeBarButtonsIfNeeded': ['pan2d', 'zoomIn2d', 'zoomOut2d', 'resetScale2d']
+    })
 
-    # Text Analysis
-    st.info(f"""
-    **تحليل السيولة (Liquidity Logic):**
-    تم تنظيف الشارت لعرض مناطق الزخم الحقيقي فقط. العلامات الصفراء (الماسات) تشير الآن إلى **أقوى 5% من التحركات** خلال الفترة المحددة، وهي المناطق التي غالباً ما يترك فيها "صناع السوق" فجوات سعرية (FVG) يعود السعر لاختبارها لاحقاً.
-    """)
+    st.caption("💡 نصيحة: استخدم إصبعين للتكبير/التصغير، وإصبع واحد لتحريك الشارت.")
 
 else:
-    st.error("Error: Symbol not found or API issue. Try a different ticker.")
+    st.error("لم يتم العثور على البيانات. تأكد من الرمز.")
