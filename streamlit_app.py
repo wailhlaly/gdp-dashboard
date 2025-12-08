@@ -1,155 +1,142 @@
 import streamlit as st
 import yfinance as yf
 import pandas as pd
-import numpy as np
-from streamlit_lightweight_charts import renderLightweightCharts
+import streamlit_lightweight_charts as slc # استيراد المكتبة
 
 # --- 1. CONFIGURATION ---
-st.set_page_config(layout="wide", page_title="Mudarib Pro V5")
+st.set_page_config(layout="wide", page_title="Mudarib V5 Stable")
 
-# تنسيق الخلفية والألوان (Dark Mode الاحترافي)
 st.markdown("""
 <style>
     .stApp { background-color: #131722; }
-    h1, h2, h3, p, div { color: #d1d4dc; }
-    .stTextInput > div > div > input { color: #d1d4dc; background-color: #2a2e39; }
-    .stSelectbox > div > div > div { color: #d1d4dc; background-color: #2a2e39; }
+    h1, h2, h3, p, div, span { color: #d1d4dc; }
+    /* إصلاح ألوان القوائم */
+    .stTextInput input, .stSelectbox div[data-baseweb="select"] {
+        color: #d1d4dc !important;
+        background-color: #2a2e39 !important;
+    }
 </style>
 """, unsafe_allow_html=True)
 
-st.title("⚡ Mudarib Pro | TradingView Engine")
+st.title("⚡ Mudarib V5 | TradingView Engine")
 
-# --- 2. SIDEBAR INPUTS (FIXED) ---
-# أعدنا هذه القائمة لضمان عدم حدوث خطأ "Data not found"
+# --- 2. SIDEBAR ---
 with st.sidebar:
-    st.header("إعدادات السهم")
+    st.header("Settings")
+    # إدخال الرمز والسوق
+    c1, c2 = st.columns([2, 1])
+    with c1:
+        symbol = st.text_input("Symbol", "2222")
+    with c2:
+        suffix = st.selectbox("Market", [".SR", "", ".L", ".HK"])
     
-    col_sym, col_mkt = st.columns([2, 1])
-    with col_sym:
-        symbol_val = st.text_input("رمز السهم", "2222") # أرامكو كمثال
-    with col_mkt:
-        market_suffix = st.selectbox("السوق", [".SR", "", ".L", ".HK"], index=0)
+    full_ticker = f"{symbol}{suffix}" if suffix else symbol
     
-    # دمج الرمز مع الامتداد
-    full_ticker = f"{symbol_val}{market_suffix}" if market_suffix else symbol_val
-    
-    period = st.selectbox("المدة الزمنية", ["1y", "2y", "5y"], index=0)
-    timeframe = st.selectbox("الفاصي", ["1d", "1wk"], index=0)
+    period = st.selectbox("Period", ["1y", "2y", "5y"])
+    timeframe = st.selectbox("Interval", ["1d", "1wk"])
 
-# --- 3. DATA ENGINE (ROBUST) ---
-@st.cache_data(ttl=3600) # تخزين مؤقت لساعة لتسريع الأداء
-def fetch_data(ticker, p, i):
+# --- 3. DATA ENGINE ---
+@st.cache_data(ttl=300)
+def get_data(ticker, p, i):
     try:
-        # تحميل البيانات
         df = yf.download(ticker, period=p, interval=i, progress=False)
         
-        # معالجة مشكلة yfinance الجديدة (MultiIndex)
+        # FIX 1: MultiIndex Issue
         if isinstance(df.columns, pd.MultiIndex):
             df.columns = df.columns.get_level_values(0)
-            
-        if df.empty:
-            return None
-
-        # تجهيز البيانات
-        df = df.reset_index()
-        df.columns = [c.lower() for c in df.columns] # توحيد أسماء الأعمدة للصغيرة
         
-        # خوارزمية ICT (Smart Imbalance)
-        # نحدد فقط الشموع التي جسمها أكبر من 95% من الشموع الأخرى
+        if df.empty: return None
+        
+        df = df.reset_index()
+        # توحيد أسماء الأعمدة لتسهيل التعامل
+        df.columns = [c.lower() for c in df.columns]
+        
+        # ICT Logic: Calculate Imbalance
         df['body'] = abs(df['close'] - df['open'])
-        threshold = df['body'].quantile(0.95)
+        threshold = df['body'].quantile(0.95) # Top 5% candles
         df['imbalance'] = df['body'] > threshold
         
         return df
-    except Exception as e:
+    except Exception:
         return None
 
-# جلب البيانات
-df = fetch_data(full_ticker, period, timeframe)
+df = get_data(full_ticker, period, timeframe)
 
 if df is not None:
-    # --- 4. DATA PREPARATION FOR CHARTS ---
-    # تحويل البيانات لصيغة تقبلها مكتبة Lightweight Charts
+    # --- 4. DATA SERIALIZATION (THE FIX) ---
+    # هنا نقوم بتحويل أرقام Numpy إلى Python Floats لمنع خطأ TypeError
     
-    # أ) بيانات الشموع
-    candles_data = []
+    candles = []
+    markers = []
+    
     for _, row in df.iterrows():
-        candles_data.append({
-            "time": row['date'].strftime('%Y-%m-%d'),
-            "open": row['open'],
-            "high": row['high'],
-            "low": row['low'],
-            "close": row['close']
+        # تحويل التاريخ إلى نص
+        t_str = row['date'].strftime('%Y-%m-%d')
+        
+        # إضافة الشموع (مع تحويل float إجباري)
+        candles.append({
+            "time": t_str,
+            "open": float(row['open']),
+            "high": float(row['high']),
+            "low": float(row['low']),
+            "close": float(row['close']),
         })
+        
+        # إضافة العلامات (فقط للشموع القوية)
+        if row['imbalance']:
+            markers.append({
+                "time": t_str,
+                "position": "aboveBar",
+                "color": "#e91e63", # لون فوشي واضح
+                "shape": "arrowDown",
+                "text": "FVG",
+                "size": 1
+            })
 
-    # ب) بيانات العلامات (Imbalance Markers)
-    markers_data = []
-    imbalance_rows = df[df['imbalance']]
-    
-    for _, row in imbalance_rows.iterrows():
-        markers_data.append({
-            "time": row['date'].strftime('%Y-%m-%d'),
-            "position": "aboveBar", # موقع العلامة
-            "color": "#FFD700",     # لون ذهبي
-            "shape": "arrowDown",
-            "text": "ICT Gap",
-            "size": 1               # حجم العلامة (صغير وأنيق)
-        })
-
-    # --- 5. CHART RENDER ---
-    
-    # إعدادات الشارت (نفس ستايل TradingView)
-    chart_options = {
+    # --- 5. CHART OPTIONS ---
+    chartOptions = {
         "layout": {
             "backgroundColor": "#131722",
             "textColor": "#d1d4dc"
         },
         "grid": {
-            "vertLines": {"color": "rgba(42, 46, 57, 0.2)", "style": 1},
-            "horzLines": {"color": "rgba(42, 46, 57, 0.2)", "style": 1}
-        },
-        "rightPriceScale": {
-            "borderColor": "rgba(197, 203, 206, 0.8)",
-            "visible": True
+            "vertLines": {"color": "rgba(42, 46, 57, 0.5)", "style": 1},
+            "horzLines": {"color": "rgba(42, 46, 57, 0.5)", "style": 1}
         },
         "timeScale": {
-            "borderColor": "rgba(197, 203, 206, 0.8)",
-            "visible": True
+            "borderColor": "#485c7b",
         }
     }
 
-    series_candlestick = [
+    series = [
         {
             "type": 'Candlestick',
-            "data": candles_data,
+            "data": candles,
             "options": {
-                "upColor": '#089981',     # أخضر حديث
-                "downColor": '#f23645',   # أحمر حديث
+                "upColor": '#26a69a',
+                "downColor": '#ef5350',
                 "borderVisible": False,
-                "wickUpColor": '#089981',
-                "wickDownColor": '#f23645'
+                "wickUpColor": '#26a69a',
+                "wickDownColor": '#ef5350'
             },
-            "markers": markers_data 
+            "markers": markers
         }
     ]
 
-    # عرض معلومات السعر الحالي
-    curr_price = df['close'].iloc[-1]
-    prev_price = df['close'].iloc[-2]
-    change = ((curr_price - prev_price) / prev_price) * 100
-    color_change = "green" if change > 0 else "red"
+    # --- 6. RENDER ---
+    curr_price = float(df['close'].iloc[-1])
+    prev_price = float(df['close'].iloc[-2])
+    chg = ((curr_price - prev_price)/prev_price)*100
+    color = "green" if chg > 0 else "red"
     
-    st.markdown(f"### {full_ticker} : {curr_price:.2f} <span style='color:{color_change}'>({change:+.2f}%)</span>", unsafe_allow_html=True)
-
-    # رسم الشارت النهائي
-    renderLightweightCharts(
-        options=chart_options,
-        series=series_candlestick,
-        height=550 # ارتفاع مناسب للجوال
+    st.markdown(f"### {full_ticker} : {curr_price:.2f} <span style='color:{color}'>({chg:+.2f}%)</span>", unsafe_allow_html=True)
+    
+    # استدعاء الدالة
+    slc.renderLightweightCharts(
+        options=chartOptions,
+        series=series,
+        height=500
     )
-    
-    st.caption("✅ تم التحليل باستخدام محرك: Lightweight Charts (TradingView)")
 
 else:
-    st.error(f"عذراً، لم يتم العثور على بيانات للسهم: {full_ticker}")
-    st.info("تأكد من كتابة الرمز الصحيح واختيار السوق المناسب من القائمة الجانبية.")
+    st.error(f"Data Not Found for {full_ticker}. Check symbol/suffix.")
