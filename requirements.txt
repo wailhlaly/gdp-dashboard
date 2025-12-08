@@ -5,6 +5,5 @@ numpy
 plotly
 xgboost
 scikit-learn
-ta
 matplotlib
 seaborn
