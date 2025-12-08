@@ -4,130 +4,152 @@ import pandas as pd
 import numpy as np
 from streamlit_lightweight_charts import renderLightweightCharts
 
-# --- PAGE CONFIG ---
-st.set_page_config(layout="wide", page_title="Mudarib Pro (TV Style)")
+# --- 1. CONFIGURATION ---
+st.set_page_config(layout="wide", page_title="Mudarib Pro V5")
 
-# --- STYLING ---
+# تنسيق الخلفية والألوان (Dark Mode الاحترافي)
 st.markdown("""
 <style>
     .stApp { background-color: #131722; }
-    h1 { color: #d1d4dc !important; }
+    h1, h2, h3, p, div { color: #d1d4dc; }
+    .stTextInput > div > div > input { color: #d1d4dc; background-color: #2a2e39; }
+    .stSelectbox > div > div > div { color: #d1d4dc; background-color: #2a2e39; }
 </style>
 """, unsafe_allow_html=True)
 
 st.title("⚡ Mudarib Pro | TradingView Engine")
 
-# --- SIDEBAR ---
+# --- 2. SIDEBAR INPUTS (FIXED) ---
+# أعدنا هذه القائمة لضمان عدم حدوث خطأ "Data not found"
 with st.sidebar:
-    st.header("Settings")
-    symbol = st.text_input("Symbol", "2222.SR")
-    period = st.selectbox("Lookback", ["1y", "2y", "5y"])
-    timeframe = st.selectbox("Timeframe", ["1d", "1wk"])
+    st.header("إعدادات السهم")
+    
+    col_sym, col_mkt = st.columns([2, 1])
+    with col_sym:
+        symbol_val = st.text_input("رمز السهم", "2222") # أرامكو كمثال
+    with col_mkt:
+        market_suffix = st.selectbox("السوق", [".SR", "", ".L", ".HK"], index=0)
+    
+    # دمج الرمز مع الامتداد
+    full_ticker = f"{symbol_val}{market_suffix}" if market_suffix else symbol_val
+    
+    period = st.selectbox("المدة الزمنية", ["1y", "2y", "5y"], index=0)
+    timeframe = st.selectbox("الفاصي", ["1d", "1wk"], index=0)
 
-# --- DATA ENGINE ---
-@st.cache_data
-def get_tv_data(ticker, p, i):
+# --- 3. DATA ENGINE (ROBUST) ---
+@st.cache_data(ttl=3600) # تخزين مؤقت لساعة لتسريع الأداء
+def fetch_data(ticker, p, i):
     try:
+        # تحميل البيانات
         df = yf.download(ticker, period=p, interval=i, progress=False)
+        
+        # معالجة مشكلة yfinance الجديدة (MultiIndex)
         if isinstance(df.columns, pd.MultiIndex):
             df.columns = df.columns.get_level_values(0)
-        
-        if df.empty: return None
+            
+        if df.empty:
+            return None
 
-        # Reset index to make Date a column
+        # تجهيز البيانات
         df = df.reset_index()
+        df.columns = [c.lower() for c in df.columns] # توحيد أسماء الأعمدة للصغيرة
         
-        # Calculate Logic (ICT Imbalance)
-        df['Body'] = abs(df['Close'] - df['Open'])
-        threshold = df['Body'].quantile(0.95)
-        df['Imbalance'] = df['Body'] > threshold
+        # خوارزمية ICT (Smart Imbalance)
+        # نحدد فقط الشموع التي جسمها أكبر من 95% من الشموع الأخرى
+        df['body'] = abs(df['close'] - df['open'])
+        threshold = df['body'].quantile(0.95)
+        df['imbalance'] = df['body'] > threshold
         
         return df
-    except:
+    except Exception as e:
         return None
 
-df = get_tv_data(symbol, period, timeframe)
+# جلب البيانات
+df = fetch_data(full_ticker, period, timeframe)
 
 if df is not None:
-    # --- PREPARE DATA FOR LIGHTWEIGHT CHARTS ---
-    # المكتبة تحتاج تنسيق خاص جداً (List of Dictionaries)
+    # --- 4. DATA PREPARATION FOR CHARTS ---
+    # تحويل البيانات لصيغة تقبلها مكتبة Lightweight Charts
     
-    # 1. Candlestick Data
-    candles = []
-    for index, row in df.iterrows():
-        # تحويل التاريخ إلى سترينج
-        time_str = row['Date'].strftime('%Y-%m-%d')
-        candles.append({
-            "time": time_str,
-            "open": row['Open'],
-            "high": row['High'],
-            "low": row['Low'],
-            "close": row['Close']
+    # أ) بيانات الشموع
+    candles_data = []
+    for _, row in df.iterrows():
+        candles_data.append({
+            "time": row['date'].strftime('%Y-%m-%d'),
+            "open": row['open'],
+            "high": row['high'],
+            "low": row['low'],
+            "close": row['close']
         })
 
-    # 2. Markers (Imbalance/ICT)
-    markers = []
-    imbalance_rows = df[df['Imbalance']]
-    for index, row in imbalance_rows.iterrows():
-        time_str = row['Date'].strftime('%Y-%m-%d')
-        markers.append({
-            "time": time_str,
-            "position": "aboveBar",
-            "color": "#e91e63", # لون مميز (وردي/أحمر)
+    # ب) بيانات العلامات (Imbalance Markers)
+    markers_data = []
+    imbalance_rows = df[df['imbalance']]
+    
+    for _, row in imbalance_rows.iterrows():
+        markers_data.append({
+            "time": row['date'].strftime('%Y-%m-%d'),
+            "position": "aboveBar", # موقع العلامة
+            "color": "#FFD700",     # لون ذهبي
             "shape": "arrowDown",
-            "text": "FVG"
+            "text": "ICT Gap",
+            "size": 1               # حجم العلامة (صغير وأنيق)
         })
 
-    # --- CHART CONFIGURATION (TradingView Style) ---
-    chartOptions = {
+    # --- 5. CHART RENDER ---
+    
+    # إعدادات الشارت (نفس ستايل TradingView)
+    chart_options = {
         "layout": {
-            "backgroundColor": "#131722", # لون خلفية تريدنج فيو الداكن
+            "backgroundColor": "#131722",
             "textColor": "#d1d4dc"
         },
         "grid": {
-            "vertLines": {"color": "rgba(42, 46, 57, 0.5)", "style": 1}, # خطوط شبكة خفيفة
-            "horzLines": {"color": "rgba(42, 46, 57, 0.5)", "style": 1}
+            "vertLines": {"color": "rgba(42, 46, 57, 0.2)", "style": 1},
+            "horzLines": {"color": "rgba(42, 46, 57, 0.2)", "style": 1}
         },
-        "crosshair": {
-            "mode": 1 # Magnet mode
-        },
-        "priceScale": {
-            "borderColor": "rgba(197, 203, 206, 0.8)"
+        "rightPriceScale": {
+            "borderColor": "rgba(197, 203, 206, 0.8)",
+            "visible": True
         },
         "timeScale": {
             "borderColor": "rgba(197, 203, 206, 0.8)",
-            "timeVisible": True
+            "visible": True
         }
     }
 
-    # تعريف السلسلة (Candlestick Series)
-    seriesCandlestickChart = [
+    series_candlestick = [
         {
             "type": 'Candlestick',
-            "data": candles,
+            "data": candles_data,
             "options": {
-                "upColor": '#26a69a',      # أخضر تريدنج فيو
-                "downColor": '#ef5350',    # أحمر تريدنج فيو
+                "upColor": '#089981',     # أخضر حديث
+                "downColor": '#f23645',   # أحمر حديث
                 "borderVisible": False,
-                "wickUpColor": '#26a69a',
-                "wickDownColor": '#ef5350'
+                "wickUpColor": '#089981',
+                "wickDownColor": '#f23645'
             },
-            "markers": markers  # إضافة علامات الـ ICT
+            "markers": markers_data 
         }
     ]
 
-    # --- RENDER THE CHART ---
-    st.subheader(f"Chart: {symbol}")
+    # عرض معلومات السعر الحالي
+    curr_price = df['close'].iloc[-1]
+    prev_price = df['close'].iloc[-2]
+    change = ((curr_price - prev_price) / prev_price) * 100
+    color_change = "green" if change > 0 else "red"
     
-    # رسم الشارت
-    renderLightweightCharts(
-        options=chartOptions,
-        series=seriesCandlestickChart,
-        height=600 # ارتفاع ممتاز للجوال
-    )
+    st.markdown(f"### {full_ticker} : {curr_price:.2f} <span style='color:{color_change}'>({change:+.2f}%)</span>", unsafe_allow_html=True)
 
-    st.success("تم استخدام محرك TradingView (Lightweight Charts) لعرض سلس واحترافي.")
+    # رسم الشارت النهائي
+    renderLightweightCharts(
+        options=chart_options,
+        series=series_candlestick,
+        height=550 # ارتفاع مناسب للجوال
+    )
+    
+    st.caption("✅ تم التحليل باستخدام محرك: Lightweight Charts (TradingView)")
 
 else:
-    st.error("Data not found.")
-
+    st.error(f"عذراً، لم يتم العثور على بيانات للسهم: {full_ticker}")
+    st.info("تأكد من كتابة الرمز الصحيح واختيار السوق المناسب من القائمة الجانبية.")
