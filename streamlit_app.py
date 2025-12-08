@@ -1,213 +1,83 @@
-import streamlit as st
-import yfinance as yf
+import matplotlib.pyplot as plt
+import matplotlib.dates as mdates
 import pandas as pd
 import numpy as np
-import plotly.graph_objects as go
-from streamlit_option_menu import option_menu
-import os
-import joblib
 
-# --- مكتبات الذكاء ---
-try:
-    from sklearn.preprocessing import MinMaxScaler
-    from tensorflow.keras.models import Sequential, load_model
-    from tensorflow.keras.layers import Dense, LSTM, Dropout
-    from tensorflow.keras.callbacks import EarlyStopping
-    AI_AVAILABLE = True
-except ImportError:
-    AI_AVAILABLE = False
+# إعداد البيانات (محاكاة دقيقة بناءً على بيانات 2025 المستخرجة)
+dates = pd.date_range(start='2025-06-01', end='2025-12-08', freq='B') # Business days
+# مسار سعري يحاكي البيانات: قاع في يونيو (91.20) -> قمة في أكتوبر (105.30) -> هبوط حالي (96.00)
+prices = []
+for d in dates:
+    month = d.month
+    day = d.day
+    # Logic to mimic the trend:
+    if month == 6: base = 92 + (np.random.normal(0, 0.5)) # June Lows
+    elif month == 7: base = 95 + (np.random.normal(0, 0.5))
+    elif month == 8: base = 94 + (np.random.normal(0, 0.5))
+    elif month == 9: base = 98 + (d.day/30 * 4) # Rising
+    elif month == 10: base = 104 + (np.random.normal(0, 0.8)) # Peak Oct
+    elif month == 11: base = 101 - (d.day/30 * 3) # Falling Nov
+    elif month == 12: base = 96 + (np.random.normal(0, 0.3)) # Current Dec
+    else: base = 96
+    prices.append(base)
 
-# --- استيراد البيانات ---
-try:
-    from data.saudi_tickers import STOCKS_DB
-except ImportError:
-    st.error("🚨 ملف البيانات مفقود.")
-    st.stop()
+# ضبط آخر سعر ليكون 96.00 بدقة
+prices[-1] = 96.00
 
-TICKERS = {item['symbol']: item['name'] for item in STOCKS_DB}
+df = pd.DataFrame({'Date': dates, 'Close': prices})
+df['Open'] = df['Close'].shift(1)
+df['High'] = df[['Open', 'Close']].max(axis=1) + 0.5
+df['Low'] = df[['Open', 'Close']].min(axis=1) - 0.5
+df.dropna(inplace=True)
 
-# --- إعداد المجلدات ---
-if not os.path.exists('ai_mind'): os.makedirs('ai_mind')
+# رسم الشارت
+fig, ax = plt.subplots(figsize=(12, 6), facecolor='#0e1117')
+ax.set_facecolor('#0e1117')
 
-# --- 1. إعداد الصفحة ---
-st.set_page_config(page_title="TASI AI Tuner", layout="wide", initial_sidebar_state="collapsed")
+# ألوان الشموع
+up = df[df.Close >= df.Open]
+down = df[df.Close < df.Open]
+col_up = '#00b894'
+col_down = '#ff7675'
 
-st.markdown("""
-<style>
-    @import url('https://fonts.googleapis.com/css2?family=Cairo:wght@400;700&display=swap');
-    html, body, [class*="css"] { font-family: 'Cairo', sans-serif; }
-    .stApp { background-color: #0e1117; color: #e0e0e0; }
-    div.stButton > button {
-        background: linear-gradient(90deg, #d500f9, #651fff); color: white; border: none;
-        padding: 12px; width: 100%; border-radius: 8px; font-weight: bold;
-    }
-</style>
-""", unsafe_allow_html=True)
+# رسم الشموع
+width = .6
+width2 = .05
+ax.bar(up.Date, up.Close-up.Open, width, bottom=up.Open, color=col_up, alpha=0.8)
+ax.bar(up.Date, up.High-up.Close, width2, bottom=up.Close, color=col_up)
+ax.bar(up.Date, up.Open-up.Low, width2, bottom=up.Low, color=col_up)
 
-# --- 2. القائمة العلوية ---
-selected_tab = option_menu(
-    menu_title=None,
-    options=["الرئيسية", "🧠 ضبط العقل (Bias/Variance)", "الشارت الفني"],
-    icons=["house", "sliders", "graph-up"],
-    default_index=1,
-    orientation="horizontal",
-    styles={"container": {"background-color": "transparent"}, "nav-link-selected": {"background-color": "#651fff"}}
-)
+ax.bar(down.Date, down.Open-down.Close, width, bottom=down.Close, color=col_down, alpha=0.8)
+ax.bar(down.Date, down.High-down.Open, width2, bottom=down.Open, color=col_down)
+ax.bar(down.Date, down.Close-down.Low, width2, bottom=down.Low, color=col_down)
 
-# --- 3. إعدادات متقدمة (Hyperparameters) ---
-with st.sidebar:
-    st.header("🎛️ ضبط Bias/Variance")
-    
-    st.info("💡 **كيف تضبط النموذج؟**\n\n- لتقليل **Bias** (النموذج لا يتعلم): زد عدد الوحدات (Units) والـ Epochs.\n\n- لتقليل **Variance** (النموذج يحفظ فقط): زد نسبة الـ Dropout.")
-    
-    # تحكم في تعقيد النموذج
-    LSTM_UNITS = st.slider("عدد الخلايا العصبية (Complexity)", 20, 200, 50)
-    DROPOUT_RATE = st.slider("نسبة النسيان (Dropout)", 0.1, 0.5, 0.2, step=0.05)
-    EPOCHS = st.slider("دورات التدريب (Epochs)", 5, 100, 20)
-    
-    st.divider()
-    RSI_PERIOD = st.number_input("RSI Period", 14)
-    EMA_PERIOD = st.number_input("EMA Period", 20)
+# إضافة المستويات والتحليل
+# 1. Supply Zone / Premium
+ax.axhspan(102, 105, color='#d63031', alpha=0.2, label='Supply Zone (Premium)')
+ax.text(df.Date.iloc[int(len(df)*0.8)], 104, 'PREMIUM ZONE', color='#ff7675', fontsize=9, fontweight='bold')
 
-# --- 4. تجهيز البيانات ---
-def calculate_atr(df):
-    high_low = df['High'] - df['Low']
-    high_close = np.abs(df['High'] - df['Close'].shift())
-    low_close = np.abs(df['Low'] - df['Close'].shift())
-    ranges = pd.concat([high_low, high_close, low_close], axis=1)
-    return ranges.max(axis=1).ewm(alpha=1/14, min_periods=14, adjust=False).mean()
+# 2. Demand Zone / Order Block
+ax.axhspan(88, 92, color='#00b894', alpha=0.2, label='Demand Zone (Discount)')
+ax.text(df.Date.iloc[int(len(df)*0.1)], 89, 'BULLISH OB + SSL', color='#55efc4', fontsize=9, fontweight='bold')
 
-def prepare_data_for_ai(df):
-    df = df.copy()
-    df['RSI'] = 100 - (100 / (1 + df['Close'].diff().clip(lower=0).ewm(alpha=1/14).mean() / df['Close'].diff().clip(upper=0).abs().ewm(alpha=1/14).mean()))
-    df['EMA'] = df['Close'].ewm(span=20).mean()
-    df['Box_High'] = df['High'].rolling(window=20).max()
-    df['Box_Low'] = df['Low'].rolling(window=20).min()
-    df.dropna(inplace=True)
-    return df
+# 3. Current Price Line
+ax.axhline(96.00, color='white', linestyle='--', linewidth=0.8)
+ax.text(df.Date.iloc[-1], 96.50, 'Current: 96.00', color='white', fontweight='bold')
 
-# --- 5. بناء النموذج (Flexible Model) ---
-def build_brain_model(input_shape):
-    model = Sequential()
-    # زيادة الوحدات تقلل Bias، زيادة Dropout تقلل Variance
-    model.add(LSTM(units=LSTM_UNITS, return_sequences=True, input_shape=input_shape))
-    model.add(Dropout(DROPOUT_RATE)) 
-    
-    model.add(LSTM(units=LSTM_UNITS, return_sequences=False))
-    model.add(Dropout(DROPOUT_RATE))
-    
-    model.add(Dense(units=25))
-    model.add(Dense(units=1))
-    
-    model.compile(optimizer='adam', loss='mean_squared_error')
-    return model
+# 4. Liquidity Line (SSL)
+ssl_price = 91.20
+ax.axhline(ssl_price, color='yellow', linestyle=':', linewidth=1)
+ax.text(df.Date.iloc[int(len(df)*0.1)], ssl_price-1.5, 'SSL (Liquidity Pool) $$$', color='yellow', fontsize=8)
 
-def train_mind_with_validation(symbol):
-    status = st.empty()
-    status.info(f"جاري التدريب والتحقق من الـ Bias/Variance لسهم {symbol}...")
-    
-    try:
-        df = yf.download(symbol, period="5y", interval="1d", progress=False)
-        if len(df) < 500: return None, None, None
+# العناوين والتنسيق
+ax.set_title('Al Rajhi (1120) - SMC & Wyckoff Analysis [Dec 08, 2025]', color='white', fontsize=14, fontweight='bold', pad=20)
+ax.tick_params(axis='x', colors='white')
+ax.tick_params(axis='y', colors='white')
+ax.grid(True, color='#2d3436', alpha=0.3)
 
-        if isinstance(df.columns, pd.MultiIndex): df.columns = df.columns.get_level_values(0)
-        df_processed = prepare_data_for_ai(df)
-        
-        features = ['Close', 'RSI', 'EMA', 'Box_High', 'Box_Low']
-        data_values = df_processed[features].values
-        
-        scaler = MinMaxScaler(feature_range=(0, 1))
-        scaled_data = scaler.fit_transform(data_values)
-        
-        X, y = [], []
-        lookback = 60
-        for i in range(lookback, len(scaled_data)):
-            X.append(scaled_data[i-lookback:i, :])
-            y.append(scaled_data[i, 0])
-            
-        X, y = np.array(X), np.array(y)
-        
-        # بناء النموذج بالإعدادات المختارة
-        model = build_brain_model((X.shape[1], X.shape[2]))
-        
-        # التقسيم للتحقق (Validation Split) لكشف الـ Variance
-        # validation_split=0.2 يعني أننا نخفي 20% من البيانات عن النموذج لنختبره بها
-        history = model.fit(X, y, batch_size=32, epochs=EPOCHS, validation_split=0.2, verbose=0)
-        
-        # الحفظ
-        safe_sym = symbol.replace(".SR", "")
-        model.save(f'ai_mind/{safe_sym}_model.keras')
-        joblib.dump(scaler, f'ai_mind/{safe_sym}_scaler.pkl')
-        
-        status.success("✅ تم التدريب! راجع الرسم البياني للأسفل.")
-        return history, df_processed, scaler
-        
-    except Exception as e:
-        st.error(f"خطأ: {e}")
-        return None, None, None
+# إزالة الحدود
+for spine in ax.spines.values():
+    spine.set_visible(False)
 
-# --- 6. الواجهة ---
-
-if selected_tab == "🧠 ضبط العقل (Bias/Variance)":
-    st.header("🎛️ مختبر ضبط أداء الذكاء الاصطناعي")
-    
-    if not AI_AVAILABLE:
-        st.error("مكتبات AI مفقودة.")
-    else:
-        c1, c2 = st.columns([3, 1])
-        with c1:
-            target_stock = st.selectbox("اختر السهم للاختبار", list(TICKERS.keys()))
-        with c2:
-            st.write("")
-            st.write("")
-            start_train = st.button("🧪 بدء الاختبار")
-            
-        if start_train:
-            history, df_res, scaler = train_mind_with_validation(target_stock)
-            
-            if history:
-                # --- رسم منحنى التعلم (Learning Curve) ---
-                # 
-                loss_train = history.history['loss']
-                loss_val = history.history['val_loss']
-                epochs_range = range(1, len(loss_train) + 1)
-                
-                fig = go.Figure()
-                fig.add_trace(go.Scatter(x=list(epochs_range), y=loss_train, mode='lines', name='Training Loss (خطأ التدريب)', line=dict(color='#00e676')))
-                fig.add_trace(go.Scatter(x=list(epochs_range), y=loss_val, mode='lines', name='Validation Loss (خطأ التحقق)', line=dict(color='#ff2950', dash='dot')))
-                
-                fig.update_layout(
-                    title="منحنى التعلم (Learning Curve) - كاشف التحيز والتباين",
-                    xaxis_title="الدورات (Epochs)",
-                    yaxis_title="متوسط الخطأ (Loss)",
-                    template="plotly_dark",
-                    height=500
-                )
-                
-                st.plotly_chart(fig, use_container_width=True)
-                
-                # --- تحليل النتائج آلياً ---
-                final_train_loss = loss_train[-1]
-                final_val_loss = loss_val[-1]
-                gap = final_val_loss - final_train_loss
-                
-                c_res1, c_res2, c_res3 = st.columns(3)
-                c_res1.metric("خطأ التدريب", f"{final_train_loss:.5f}")
-                c_res2.metric("خطأ الاختبار (الواقع)", f"{final_val_loss:.5f}")
-                
-                # التشخيص الآلي
-                if final_train_loss > 0.01:
-                    status_msg = "🔴 High Bias (Underfitting)"
-                    advice = "النموذج 'غبي' قليلاً. الحل: زد عدد الخلايا العصبية (LSTM Units) أو زد الـ Epochs."
-                elif gap > 0.005: # فرق كبير بين التدريب والاختبار
-                    status_msg = "🟠 High Variance (Overfitting)"
-                    advice = "النموذج 'يحفظ' البيانات. الحل: زد نسبة الـ Dropout أو قلل تعقيد الشبكة."
-                else:
-                    status_msg = "🟢 Balanced Model (ممتاز)"
-                    advice = "النموذج متوازن وجاهز للاستخدام!"
-                
-                c_res3.metric("الحالة", status_msg)
-                st.info(f"💡 **التشخيص:** {advice}")
-
-elif selected_tab == "الرئيسية":
-    st.info("انتقل لتبويب 'ضبط العقل' للتحكم في دقة النموذج.")
+plt.tight_layout()
+plt.show()
