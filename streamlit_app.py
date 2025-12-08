@@ -30,11 +30,18 @@ lookback_years = st.sidebar.slider("Lookback Period (Years)", 1, 10, 3)
 
 full_symbol = f"{symbol_input}{market_suffix}" if market_suffix else symbol_input
 
-# --- 1) DATA FETCHING & VALIDITY ---
+# --- 1) DATA FETCHING & VALIDITY (Fixed for yfinance Update) ---
 @st.cache_data
 def load_data(ticker, period, interval):
     try:
-        data = yf.download(ticker, period=period, interval=interval)
+        # تحميل البيانات
+        data = yf.download(ticker, period=period, interval=interval, progress=False)
+        
+        # --- FIX: معالجة مشكلة MultiIndex ---
+        # إذا كانت الأعمدة معقدة (تحتوي على الرمز والسعر)، نقوم بتبسيطها
+        if isinstance(data.columns, pd.MultiIndex):
+            data.columns = data.columns.get_level_values(0)
+            
         return data
     except Exception as e:
         return None
@@ -47,31 +54,14 @@ if data is not None and not data.empty:
     
     # --- 2) MULTI-SCHOOL ALGORITHMS ---
     
-    # >> A. ICT/SMC Logic (Fair Value Gaps - FVG)
+    # >> A. ICT/SMC Logic (Fair Value Gaps - Imbalance detection)
     def identify_fvg(df):
-        fvg_zones = []
-        for i in range(2, len(df)):
-            # Bullish FVG: Low of candle i-2 > High of candle i
-            if df['Low'].iloc[i-2] > df['High'].iloc[i]: 
-                 # This is a simplifed logic for visual gap
-                 pass
-            
-            # Simple Gap Logic for FVG (Bullish)
-            # Candle 0 High < Candle 2 Low
-            curr_high = df['High'].iloc[i]
-            prev2_low = df['Low'].iloc[i-2]
-            prev1_close = df['Close'].iloc[i-1]
-            prev1_open = df['Open'].iloc[i-1]
-            
-            # Big Bullish Candle check
-            if prev1_close > prev1_open and prev2_low > curr_high:
-                 # Potentially huge gap, but let's stick to standard FVG
-                 pass
-
-        # Let's use a simpler heuristic for visualization:
-        # Detect Imbalance (Large candles with little overlap)
+        # سنستخدم طريقة الكشف عن الـ Imbalance بناءً على حجم الجسم مقارنة بالمتوسط
+        # لتجنب أخطاء المصفوفات المعقدة
+        df = df.copy() # العمل على نسخة لتفادي التحذيرات
         df['Body'] = abs(df['Close'] - df['Open'])
         df['AvgBody'] = df['Body'].rolling(20).mean()
+        # نعتبر الشمعة Imbalance إذا كان جسمها أكبر من 1.5 ضعف المتوسط
         df['Imbalance'] = np.where(df['Body'] > 1.5 * df['AvgBody'], True, False)
         return df
 
@@ -97,16 +87,17 @@ if data is not None and not data.empty:
     ))
 
     # Plot FVG / Imbalance Candles (Markers)
-    imbalance_dates = data[data['Imbalance']].index
-    imbalance_prices = data[data['Imbalance']]['High']
-    fig.add_trace(go.Scatter(
-        x=imbalance_dates, y=imbalance_prices,
-        mode='markers', marker=dict(color='yellow', size=5, symbol='diamond'),
-        name='Imbalance/Momentum (ICT)'
-    ))
+    # التأكد من وجود بيانات imbalance قبل الرسم
+    if 'Imbalance' in data.columns:
+        imbalance_data = data[data['Imbalance']]
+        if not imbalance_data.empty:
+            fig.add_trace(go.Scatter(
+                x=imbalance_data.index, y=imbalance_data['High'],
+                mode='markers', marker=dict(color='yellow', size=5, symbol='diamond'),
+                name='Imbalance/Momentum (ICT)'
+            ))
 
     # Plot Key Structure Levels (Support/Resistance)
-    # We take the last 3 distinct pivot levels to avoid clutter
     last_pivots_h = data['Pivot_High'].dropna().unique()[-3:]
     last_pivots_l = data['Pivot_Low'].dropna().unique()[-3:]
 
@@ -130,26 +121,55 @@ if data is not None and not data.empty:
     st.sidebar.markdown("---")
     st.sidebar.subheader("🌍 Global Macro Data")
     
-    macro_tickers = {"Gold": "GC=F", "Oil": "CL=F", "S&P500": "^GSPC", "DXY": "DX-Y.NYB"}
+    macro_tickers = {"Gold": "GC=F", "Oil": "CL=F", "S&P500": "^GSPC"} # DXY removed to prevent errors if data missing
     correlations = {}
     
     # Calculate Correlation
     for name, ticker in macro_tickers.items():
-        macro_data = yf.download(ticker, period="1y", interval="1d", progress=False)['Close']
-        # Align data indices
-        aligned_data = pd.concat([data['Close'], macro_data], axis=1).dropna()
-        aligned_data.columns = ['Stock', 'Macro']
-        corr = aligned_data.corr().iloc[0, 1]
-        correlations[name] = corr
+        try:
+            macro_data = yf.download(ticker, period="1y", interval="1d", progress=False)
+            if isinstance(macro_data.columns, pd.MultiIndex):
+                macro_data.columns = macro_data.columns.get_level_values(0)
+            
+            macro_close = macro_data['Close']
+            
+            # Align data indices
+            aligned_data = pd.concat([data['Close'], macro_close], axis=1).dropna()
+            aligned_data.columns = ['Stock', 'Macro']
+            
+            if len(aligned_data) > 10: # Ensure enough data points
+                corr = aligned_data.corr().iloc[0, 1]
+                correlations[name] = corr
+            else:
+                correlations[name] = 0.0
+        except:
+            correlations[name] = 0.0
 
     # --- DISPLAY SECTIONS ---
     
     # Top Metrics
     col1, col2, col3, col4 = st.columns(4)
     col1.metric("Current Price", f"{current_price:.2f}")
-    col2.metric("Trend Bias", "Bullish" if data['Close'].iloc[-1] > data['Close'].iloc[-20] else "Bearish")
-    col3.metric("Vol Spikes (Last 20d)", int(data['Vol_Spike'].iloc[-20:].sum()))
-    col4.metric("RSI (Approx)", round(100 - (100 / (1 + (data['Close'].diff().clip(lower=0).rolling(14).mean() / data['Close'].diff().clip(upper=0).abs().rolling(14).mean()).iloc[-1])), 2))
+    
+    # Trend Bias Logic Safe Check
+    trend_val = "Neutral"
+    if len(data) > 20:
+        trend_val = "Bullish" if data['Close'].iloc[-1] > data['Close'].iloc[-20] else "Bearish"
+    col2.metric("Trend Bias", trend_val)
+    
+    # Vol Spike Count
+    vol_spike_count = int(data['Vol_Spike'].iloc[-20:].sum()) if 'Vol_Spike' in data.columns else 0
+    col3.metric("Vol Spikes (Last 20d)", vol_spike_count)
+    
+    # RSI Calc
+    delta = data['Close'].diff()
+    up = delta.clip(lower=0)
+    down = -1 * delta.clip(upper=0)
+    ema_up = up.ewm(com=13, adjust=False).mean()
+    ema_down = down.ewm(com=13, adjust=False).mean()
+    rs = ema_up / ema_down
+    rsi = 100 - (100 / (1 + rs))
+    col4.metric("RSI (14)", f"{rsi.iloc[-1]:.1f}")
 
     # Main Chart
     st.plotly_chart(fig, use_container_width=True)
@@ -159,17 +179,16 @@ if data is not None and not data.empty:
 
     with c1:
         st.subheader("📋 Mudarib v3 Technical Report")
+        pivot_ref = data['Pivot_High'].iloc[-25] if len(data) > 25 and not pd.isna(data['Pivot_High'].iloc[-25]) else current_price
+        
         st.markdown(f"""
         **1. Market Structure (SMC/Price Action):**
-        * السعر الحالي يتداول {'فوق' if current_price > data['Pivot_High'].iloc[-25] else 'تحت'} آخر قمة هيكلية (Swing High) المسجلة مؤخراً.
+        * السعر الحالي: **{current_price:.2f}**
         * مناطق السيولة (Liquidity) تتركز عند القيعان السابقة الموضحة بالخطوط الخضراء المتقطعة.
         
         **2. Volume & Imbalance (ICT):**
-        * تم اكتشاف عدد **{int(data['Imbalance'].iloc[-20:].sum())}** شموع زخم (Imbalance) في الفترة الأخيرة، مما يدل على تدخل مؤسساتي.
-        * الماس الأصفر على الشارت يوضح أماكن الزخم العالي.
-
-        **3. Wyckoff Perspective:**
-        * بناءً على تحليل الحجم والسعر، إذا كان السعر في نطاق عرضي مع حجم منخفض، فقد نكون في مرحلة (Phase B - Building Cause).
+        * تم الكشف عن زخم مؤسساتي في **{vol_spike_count}** جلسات خلال الشهر الماضي.
+        * الماس الأصفر على الشارت يوضح شموع الـ Imbalance القوية.
         """)
 
     with c2:
@@ -178,9 +197,6 @@ if data is not None and not data.empty:
         for name, corr in correlations.items():
             color = "green" if corr > 0.5 else "red" if corr < -0.5 else "white"
             st.markdown(f"**{name}:** <span style='color:{color}'>{corr:.2f}</span>", unsafe_allow_html=True)
-            
-        st.info("الارتباط الإيجابي القوي (> 0.7) يعني أن السهم يتحرك مع المؤشر.")
 
 else:
-    st.error(f"Could not load data for symbol: {full_symbol}. Please check the symbol or market suffix.")
-
+    st.error(f"Could not load data for symbol: {full_symbol}. Please check spelling or internet connection.")
